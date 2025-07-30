@@ -1,0 +1,12 @@
+telegram:
+  token: "your-telegram-bot-token"
+  chat_id: 123456789
+
+git:
+  repo_url: "git@git.kolspace.cc:victor.kolomin/homelab.git"
+  branch: "main"
+  ssh_key_path: "./id_rsa"
+
+checker:
+  interval_minutes: 1
+  skip_list_file: "skipped.json"
