@@ -11,7 +11,8 @@ import (
 
 // DockerTagsResponse represents the JSON response from the Docker Hub tags endpoint.
 type DockerTagsResponse struct {
-	Results []DockerTag `json:"results"`
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
 }
 
 // DockerTag represents a single tag object in the JSON response.
@@ -84,6 +85,7 @@ func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 		return nil, fmt.Errorf("failed to create tags request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
 
 	resp, err = client.Do(req)
 	if err != nil {
@@ -97,19 +99,12 @@ func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 		return nil, fmt.Errorf("tags request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Внутри GetTags, когда ты декодируешь JSON:
 	var tagsData DockerTagsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tagsData); err != nil {
 		return nil, fmt.Errorf("failed to decode tags response: %w", err)
 	}
 
-	// Теперь ты можешь перебрать tagsData.Results, чтобы получить имена тегов.
-	tags := make([]string, 0, len(tagsData.Results))
-	for _, tag := range tagsData.Results {
-		tags = append(tags, tag.Name)
-	}
-
-	return tags, nil
+	return tagsData.Tags, nil
 }
 
 // basicAuth returns the base64-encoded string for a username and password
