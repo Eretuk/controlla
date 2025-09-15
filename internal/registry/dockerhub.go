@@ -78,8 +78,7 @@ func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 	fmt.Println("Successfully got Docker Hub token. Token:", token[:10]+"...")
 
 	// Шаг 2: Используем полученный токен для доступа к реестру
-	// tagsURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/tags/", image)
-	tagsURL := fmt.Sprintf("https://registry.hub.docker.com/v2/repositories/%s/tags/?page_size=100", image)
+	tagsURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/tags/list", image)
 	req, err = http.NewRequest(http.MethodGet, tagsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tags request: %w", err)
