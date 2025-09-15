@@ -3,6 +3,7 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -24,50 +25,53 @@ func NewDockerHubClient(user, pass string) *DockerHubClient {
 func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 	// 1. Get auth token
 	authURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.com&scope=repository:%s:pull", image)
-	req, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	req.SetBasicAuth(c.User, c.Pass)
+	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
+	authReq.SetBasicAuth(c.User, c.Pass)
 
-	resp, err := c.Client.Do(req)
+	authResp, err := c.Client.Do(authReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auth token: %w", err)
 	}
-	defer resp.Body.Close()
+	defer authResp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("docker hub auth failed with status: %d", resp.StatusCode)
+	if authResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(authResp.Body)
+		return nil, fmt.Errorf("auth token request failed with status %d: %s", authResp.StatusCode, string(body))
 	}
 
 	var authData map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&authData); err != nil {
+	if err := json.NewDecoder(authResp.Body).Decode(&authData); err != nil {
 		return nil, fmt.Errorf("failed to decode auth response: %w", err)
 	}
 	token := authData["token"]
 
-	// 2. Use the token to get the tags
+	// Now, use the token to get the tags from the registry API.
 	tagsURL := fmt.Sprintf("https://registry.hub.docker.com/v2/%s/tags/?page_size=100", image)
-	req, _ = http.NewRequest(http.MethodGet, tagsURL, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	tagsReq, _ := http.NewRequest(http.MethodGet, tagsURL, nil)
+	tagsReq.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err = c.Client.Do(req)
+	tagsResp, err := c.Client.Do(tagsReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tags: %w", err)
 	}
-	defer resp.Body.Close()
+	defer tagsResp.Body.Close()
 
-	var result map[string]json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode tags response: %w", err)
+	if tagsResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(tagsResp.Body)
+		return nil, fmt.Errorf("tags request failed with status %d: %s", tagsResp.StatusCode, string(body))
 	}
 
-	var tags []struct {
-		Name string `json:"name"`
+	var result struct {
+		Results []struct {
+			Name string `json:"name"`
+		} `json:"results"`
 	}
-	if err := json.Unmarshal(result["results"], &tags); err != nil {
-		return nil, fmt.Errorf("failed to parse tags from response: %w", err)
+	if err := json.NewDecoder(tagsResp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse tags response: %w", err)
 	}
 
 	var tagNames []string
-	for _, t := range tags {
+	for _, t := range result.Results {
 		tagNames = append(tagNames, t.Name)
 	}
 
