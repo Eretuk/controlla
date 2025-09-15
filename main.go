@@ -3,6 +3,7 @@ package main
 import (
 	"controlla/internal/config"
 	"controlla/internal/registry"
+	"controlla/internal/versionutils"
 	"log"
 
 	"github.com/sirupsen/logrus"
@@ -31,13 +32,16 @@ func main() {
 
 	// 3. Use the clients to get tags (example)
 	if appConfig.DockerUser != "" {
-		dockerImage := "authelia/authelia" // or your image
+		dockerImage := "authelia/authelia"
 		tags, err := dockerClient.GetTags(dockerImage)
 		if err != nil {
 			log.Printf("Error getting Docker Hub tags for %s: %v", dockerImage, err)
-		} else {
-			log.Printf("Docker Hub tags for %s: %v", dockerImage, tags)
+			return
 		}
+		latestTags := versionutils.SortAndFilterTags(tags, 5)
+		// Getiing results
+		log.Printf("Docker Hub tags for %s: %v", dockerImage, latestTags)
+
 	}
 
 	// if appConfig.GithubToken != "" {
