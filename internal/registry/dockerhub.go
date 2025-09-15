@@ -1,12 +1,31 @@
 package registry
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
+// DockerTagsResponse represents the JSON response from the Docker Hub tags endpoint.
+type DockerTagsResponse struct {
+	Results []DockerTag `json:"results"`
+}
+
+// DockerTag represents a single tag object in the JSON response.
+type DockerTag struct {
+	Name string `json:"name"`
+	// Добавь другие поля, если они нужны, например:
+	// FullSize int       `json:"full_size"`
+	// LastUpdated time.Time `json:"last_updated"`
+}
+
+// DockerAuthResponse represents the JSON response from the Docker Hub auth endpoint.
+type DockerAuthResponse struct {
+	Token string `json:"token"`
+}
 type DockerHubClient struct {
 	Client *http.Client
 	User   string
@@ -21,59 +40,81 @@ func NewDockerHubClient(user, pass string) *DockerHubClient {
 	}
 }
 
-// GetTags retrieves all image tags for a given image.
 func (c *DockerHubClient) GetTags(image string) ([]string, error) {
-	// 1. Get auth token
-	authURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.com&scope=repository:%s:pull", image)
-	authReq, _ := http.NewRequest(http.MethodGet, authURL, nil)
-	authReq.SetBasicAuth(c.User, c.Pass)
+	isPublic := c.User == "" || strings.HasPrefix(image, "library/")
+	// Шаг 1: Получаем токен с использованием ЛОГИНА И ТОКЕНА
+	authURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull", image)
 
-	authResp, err := c.Client.Do(authReq)
+	req, err := http.NewRequest(http.MethodGet, authURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create auth request: %w", err)
+	}
+
+	if !isPublic {
+		// Если образ приватный, используем Basic Auth с логином и токеном.
+		req.SetBasicAuth(c.User, c.Pass)
+	}
+	// Вместо Basic Auth, используем заголовок Authorization, как в большинстве API
+	req.Header.Set("Authorization", "Basic "+basicAuth(c.User, c.Pass))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auth token: %w", err)
 	}
-	defer authResp.Body.Close()
+	defer resp.Body.Close()
 
-	if authResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(authResp.Body)
-		return nil, fmt.Errorf("auth token request failed with status %d: %s", authResp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("auth token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var authData map[string]string
-	if err := json.NewDecoder(authResp.Body).Decode(&authData); err != nil {
+	var authData DockerAuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authData); err != nil {
 		return nil, fmt.Errorf("failed to decode auth response: %w", err)
 	}
-	token := authData["token"]
 
-	// Now, use the token to get the tags from the registry API.
-	tagsURL := fmt.Sprintf("https://registry.hub.docker.com/v2/%s/tags/?page_size=100", image)
-	tagsReq, _ := http.NewRequest(http.MethodGet, tagsURL, nil)
-	tagsReq.Header.Set("Authorization", "Bearer "+token)
+	token := authData.Token
+	fmt.Println("Successfully got Docker Hub token. Token:", token[:10]+"...")
 
-	tagsResp, err := c.Client.Do(tagsReq)
+	// Шаг 2: Используем полученный токен для доступа к реестру
+	// tagsURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/tags/", image)
+	tagsURL := fmt.Sprintf("https://registry.hub.docker.com/v2/repositories/%s/tags/?page_size=100", image)
+	req, err = http.NewRequest(http.MethodGet, tagsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tags request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err = client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tags: %w", err)
 	}
-	defer tagsResp.Body.Close()
+	defer resp.Body.Close()
 
-	if tagsResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(tagsResp.Body)
-		return nil, fmt.Errorf("tags request failed with status %d: %s", tagsResp.StatusCode, string(body))
+	fmt.Println("Response:", resp)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("tags request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var result struct {
-		Results []struct {
-			Name string `json:"name"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(tagsResp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to parse tags response: %w", err)
+	// Внутри GetTags, когда ты декодируешь JSON:
+	var tagsData DockerTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tagsData); err != nil {
+		return nil, fmt.Errorf("failed to decode tags response: %w", err)
 	}
 
-	var tagNames []string
-	for _, t := range result.Results {
-		tagNames = append(tagNames, t.Name)
+	// Теперь ты можешь перебрать tagsData.Results, чтобы получить имена тегов.
+	tags := make([]string, 0, len(tagsData.Results))
+	for _, tag := range tagsData.Results {
+		tags = append(tags, tag.Name)
 	}
 
-	return tagNames, nil
+	return tags, nil
+}
+
+// basicAuth returns the base64-encoded string for a username and password
+func basicAuth(username, password string) string {
+	auth := username + ":" + password
+	return base64.StdEncoding.EncodeToString([]byte(auth))
 }

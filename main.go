@@ -27,11 +27,11 @@ func main() {
 
 	// 2. Create clients
 	dockerClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
-	ghcrClient := registry.NewGhcrClient(appConfig.GithubToken)
+	// ghcrClient := registry.NewGhcrClient(appConfig.GithubToken)
 
 	// 3. Use the clients to get tags (example)
 	if appConfig.DockerUser != "" {
-		dockerImage := "library/nginx" // or your image
+		dockerImage := "authelia/authelia" // or your image
 		tags, err := dockerClient.GetTags(dockerImage)
 		if err != nil {
 			log.Printf("Error getting Docker Hub tags for %s: %v", dockerImage, err)
@@ -40,15 +40,15 @@ func main() {
 		}
 	}
 
-	if appConfig.GithubToken != "" {
-		ghcrImage := "authelia/authelia" // your ghcr image
-		tags, err := ghcrClient.GetTags(ghcrImage)
-		if err != nil {
-			log.Printf("Error getting GHCR tags for %s: %v", ghcrImage, err)
-		} else {
-			log.Printf("GHCR tags for %s: %v", ghcrImage, tags)
-		}
-	}
+	// if appConfig.GithubToken != "" {
+	// 	ghcrImage := "authelia/authelia" // your ghcr image
+	// 	tags, err := ghcrClient.GetTags(ghcrImage)
+	// 	if err != nil {
+	// 		log.Printf("Error getting GHCR tags for %s: %v", ghcrImage, err)
+	// 	} else {
+	// 		log.Printf("GHCR tags for %s: %v", ghcrImage, tags)
+	// 	}
+	// }
 	// for {
 	// 	logrus.Info("Checking for updates...")
 	// 	repoPath := "./repos/myrepo"
