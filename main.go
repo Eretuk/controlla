@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		logrus.Fatalf("Failed to load config: %v", err)
 	}
-	logrus.Info("Done")
+	logrus.Info("Config file loaded")
 
 	logrus.Infof("Controlla started. Checking every %d minutes.", cfg.Checker.IntervalMinutes)
 
@@ -38,8 +38,17 @@ func main() {
 
 		logrus.Infof("Found %d images:", len(images))
 		for _, img := range images {
-			logrus.Infof("  [%s/%s] %s (%s)", img.Host, img.Service, img.Name, img.Path)
+			parsed := checker.ParseImageName(img.Name)
+
+			digest, err := checker.GetImageDigest(parsed, cfg)
+			if err != nil {
+				logrus.Warnf("Failed to get digest for %s: %v", parsed.Full, err)
+				continue
+			}
+
+			logrus.Infof("[%s/%s] digest for %s: %s", img.Host, img.Service, parsed.Full, digest)
 		}
+
 		time.Sleep(time.Duration(cfg.Checker.IntervalMinutes) * time.Minute)
 	}
 
