@@ -2,25 +2,20 @@ package config
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
-type RegistryAuth struct {
-	Token    string `yaml:"token"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-}
-
-type RegistryConfig struct {
-	GHCR      RegistryAuth `yaml:"ghcr"`
-	DockerHub RegistryAuth `yaml:"dockerhub"`
-	AWS       RegistryAuth `yaml:"aws"`
+// AppConfig holds all application-wide configuration from environment variables.
+type AppConfig struct {
+	DockerUser  string
+	DockerPass  string
+	GithubToken string
 }
 
 type Config struct {
-	Registry RegistryConfig `yaml:"registry"`
-
 	Telegram struct {
 		Token  string `mapstructure:"token"`
 		ChatID int64  `mapstructure:"chat_id"`
@@ -52,4 +47,20 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// LoadFromEnv reads configuration values from environment variables.
+func LoadFromEnv() AppConfig {
+	cfg := AppConfig{
+		DockerUser:  os.Getenv("DOCKERHUB_USERNAME"),
+		DockerPass:  os.Getenv("DOCKERHUB_PASSWORD"),
+		GithubToken: os.Getenv("GITHUB_TOKEN"),
+	}
+
+	// Simple validation to ensure we have at least one token
+	if cfg.DockerUser == "" && cfg.GithubToken == "" {
+		logrus.Warning("Warning: No Docker Hub or GitHub credentials found. Some features may not work.")
+	}
+
+	return cfg
 }
