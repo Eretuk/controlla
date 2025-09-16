@@ -10,9 +10,11 @@ import (
 
 // AppConfig holds all application-wide configuration from environment variables.
 type AppConfig struct {
-	DockerUser  string
-	DockerPass  string
-	GithubToken string
+	DockerUser     string
+	DockerPass     string
+	GithubToken    string
+	TelegramToken  string
+	TelegramChatID string
 }
 
 type Config struct {
@@ -54,9 +56,11 @@ func Load(path string) (*Config, error) {
 // LoadFromEnv reads configuration values from environment variables.
 func LoadFromEnv() AppConfig {
 	cfg := AppConfig{
-		DockerUser:  os.Getenv("DOCKERHUB_USERNAME"),
-		DockerPass:  os.Getenv("DOCKERHUB_PASSWORD"),
-		GithubToken: os.Getenv("GITHUB_TOKEN"),
+		DockerUser:     os.Getenv("CONTROLLA__DOCKERHUB__USERNAME"),
+		DockerPass:     os.Getenv("CONTROLLA__DOCKERHUB__PASSWORD"),
+		GithubToken:    os.Getenv("CONTROLLA__GITHUB__TOKEN"),
+		TelegramToken:  os.Getenv("CONTROLLA__TELEGRAM__TOKEN"),
+		TelegramChatID: os.Getenv("CONTROLLA__TELEGRAM__CHAT__ID"),
 	}
 
 	// Simple validation to ensure we have at least one token

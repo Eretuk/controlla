@@ -4,11 +4,15 @@ import (
 	"controlla/internal/checker"
 	"controlla/internal/config"
 	"controlla/internal/gitrepo"
+	"controlla/internal/notifier"
 	"controlla/internal/registry"
 	"controlla/internal/versionutils"
+	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
+	"github.com/Masterminds/semver"
 	"github.com/sirupsen/logrus"
 )
 
@@ -105,8 +109,25 @@ func main() {
 			}
 			latestTags := versionutils.GetLatestTags(tags, cfg.Checker.ProposedTagsCount)
 			log.Printf("Docker Hub tags for %s: %v", parsedImage.Image, latestTags)
+
+			// Parse tag for checks
+			_, err = semver.NewVersion(strings.TrimPrefix(parsedImage.Tag, "v"))
+			if err != nil {
+				log.Printf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", parsedImage.Image, parsedImage.Tag)
+				continue
+			}
+
+			latestAvailable, isUpdateAvailable := versionutils.CheckForUpdate(parsedImage.Tag, latestTags)
+			if isUpdateAvailable {
+				log.Printf("🚨 New update for %s. Current tag: %s, Avaliable: %s", parsedImage.Image, parsedImage.Tag, latestAvailable)
+				log.Printf("Send notification to telegram")
+				message := fmt.Sprintf("🚨 New update for %s\nCurrent version: `%s`\nAvaliable version: `%s`", parsedImage.Image, parsedImage.Tag, latestAvailable)
+				notifier.SendTelegramMessage(appConfig.TelegramToken, appConfig.TelegramChatID, message)
+			} else {
+				log.Printf("✅ %s is actual. Current tag: %s", parsedImage.Image, parsedImage.Tag)
+			}
 		} else {
-			log.Printf("Skipping image %s: registry %s is not yet supported.", imageString, parsedImage.Registry)
+			// log.Printf("Skipping image %s: registry %s is not yet supported.", imageString, parsedImage.Registry)
 		}
 	}
 	// logrus.Infof("Controlla started. Checking every %d minutes.", cfg.Checker.IntervalMinutes)

@@ -3,6 +3,7 @@ package versionutils
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver"
@@ -129,14 +130,32 @@ func GetLatestTags(tags []string, count int) []string {
 
 // isIgnoredTag checks if a tag contains keywords that should be ignored.
 func isIgnoredTag(tag string) bool {
-	// Список игнорируемых слов и фраз
-	ignoredKeywords := []string{"alpha", "beta", "rc", "test", "testing", "preview", "amd64", "arm64", "linux", "windows", "debug"}
-
 	lowerTag := strings.ToLower(tag)
+
+	// Игнорируем теги с архитектурой, статусом и ОС
+	ignoredKeywords := []string{
+		"alpha", "beta", "rc", "test", "testing", "preview", "next", "latest",
+		"amd64", "arm64", "linux", "windows", "i386", "armhf", "aarch64", "ppc64le",
+		"bookworm", "trixie", "ubuntu", "buster", "bullseye", "debug",
+	}
 	for _, keyword := range ignoredKeywords {
 		if strings.Contains(lowerTag, keyword) {
 			return true
 		}
 	}
+
+	// Дополнительная проверка на нестандартные теги
+	parts := strings.Split(tag, ".")
+	if len(parts) > 3 {
+		// Игнорируем теги с более чем 3 точками (например, 3.5.5.0, RELEASE.2025...)
+		return true
+	}
+
+	// Игнорируем теги, которые начинаются с очень больших чисел (как в Grafana)
+	firstPart, err := strconv.Atoi(parts[0])
+	if err == nil && firstPart > 100000000 {
+		return true
+	}
+
 	return false
 }
