@@ -1,7 +1,3 @@
-telegram:
-  token: "your-telegram-bot-token"
-  chat_id: 123456789
-
 git:
   repo_url: "git@git.kolspace.cc:victor.kolomin/homelab.git"
   branch: "main"
