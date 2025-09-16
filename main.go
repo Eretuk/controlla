@@ -6,7 +6,9 @@ import (
 	"controlla/internal/config"
 	"controlla/internal/gitrepo"
 	"controlla/internal/notifier"
+	"controlla/internal/registry"
 	"controlla/internal/updater"
+	"controlla/internal/versionutils"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Masterminds/semver"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 )
@@ -179,12 +182,15 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery)
 }
 
 func checkUpdates(appConfig *config.AppConfig) {
-	log.Printf("Cloning repository %s to %s", cfg.Git.RepoURL, repoPath)
-	err = gitrepo.CloneOrPull(cfg.Git.RepoURL, cfg.Git.Branch, repoPath, cfg.Git.SSHKeyPath)
+	// 1. Клонируем или обновляем репозиторий
+	repoPath := appConfig.Git.LocalRepoPath
+	log.Printf("Cloning repository %s to %s", appConfig.Git.RepoURL, repoPath)
+	err := gitrepo.CloneOrPull(appConfig.Git.RepoURL, appConfig.Git.Branch, repoPath, appConfig.Git.SSHKeyPath)
 	if err != nil {
-		log.Fatalf("Failed to clone repository: %v", err)
+		log.Printf("Failed to clone or pull repository: %v", err)
+		return
 	}
-	log.Println("Repository cloned successfully.")
+	log.Println("Repository cloned or pulled successfully.")
 
 	// 2. Находим релевантные файлы
 	filePaths, err := checker.FindRelevantFiles(repoPath)
@@ -208,23 +214,46 @@ func checkUpdates(appConfig *config.AppConfig) {
 		fullImageName := fmt.Sprintf("%s/%s", service.ImageInfo.Registry, service.ImageInfo.Image)
 		servicesByImage[fullImageName] = append(servicesByImage[fullImageName], service)
 	}
+	log.Printf("Found a total of %d unique images", len(servicesByImage))
 
 	// 5. Проверяем обновления для каждого уникального образа
 	for fullImageName, services := range servicesByImage {
-		// Берем первый сервис из группы для проверки тега, так как они все одинаковые
-		currentTag := services[0].ImageInfo.Tag
-		parsedImage := services[0].ImageInfo
+		serviceInfo := services[0] // Берем первый сервис из группы для проверки
 
-		// ... (остальной код проверки, как у тебя было раньше) ...
-		// Добавь здесь свою логику:
-		// - проверка на docker.io
-		// - получение списка тегов
-		// - проверка на SemVer
-		// - сравнение версий
-		// ...
+		log.Printf("Parsing image: Registry=%s, Image=%s, Tag=%s", serviceInfo.ImageInfo.Registry, serviceInfo.ImageInfo.Image, serviceInfo.ImageInfo.Tag)
 
-		// Вот пример логики, если обновление найдено
-		if isUpdateAvailable { // Эта переменная должна быть результатом твоей логики
+		// Мы проверяем только образы из docker.io
+		if serviceInfo.ImageInfo.Registry != "docker.io" {
+			log.Printf("Skipping registry %s for image %s", serviceInfo.ImageInfo.Registry, fullImageName)
+			continue
+		}
+
+		// Получаем список тегов из Docker Hub
+		tags, err := registry.GetTags(fullImageName, appConfig.DockerUser, appConfig.DockerPass)
+		if err != nil {
+			log.Printf("Error getting tags for %s: %v", fullImageName, err)
+			continue
+		}
+
+		// Фильтруем теги по SemVer
+		latestTags := versionutils.FilterSemVerTags(tags)
+		if len(latestTags) == 0 {
+			log.Printf("⚠️ Can't check updates for %s. No SemVer tags found.", fullImageName)
+			continue
+		}
+
+		// Сравниваем версии
+		latestAvailable := latestTags[0]
+		currentVersion, err := semver.NewVersion(serviceInfo.ImageInfo.Tag)
+		if err != nil {
+			log.Printf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, serviceInfo.ImageInfo.Tag)
+			continue
+		}
+		latestVersion, _ := semver.NewVersion(latestAvailable) // Ошибку игнорируем, т.к. тег уже отфильтрован
+
+		if latestVersion.GreaterThan(currentVersion) {
+			log.Printf("🚨 New update for %s. Current tag: %s, Available: %s", fullImageName, serviceInfo.ImageInfo.Tag, latestAvailable)
+
 			// Генерируем уникальный ID для кеша
 			id := fmt.Sprintf("%x", time.Now().UnixNano())
 
@@ -232,15 +261,17 @@ func checkUpdates(appConfig *config.AppConfig) {
 			cacheMutex.Lock()
 			updateCache[id] = UpdateInfo{
 				RepoPath: repoPath,
-				Services: services,        // Сохраняем весь список
-				NewTag:   latestAvailable, // Замени на переменную с последним тегом
+				Services: services,
+				NewTag:   latestAvailable,
 			}
 			cacheMutex.Unlock()
 
-			message := fmt.Sprintf("🚨 Обновление для образа **%s**\nТекущая версия: `%s`\nДоступная версия: `%s`", parsedImage.Image, currentTag, latestAvailable)
+			message := fmt.Sprintf("🚨 Обновление для образа **%s**\nТекущая версия: `%s`\nДоступная версия: `%s`", fullImageName, serviceInfo.ImageInfo.Tag, latestAvailable)
 
 			// Отправляем сообщение, передавая ID
 			notifier.SendInteractiveMessage(appConfig.TelegramToken, appConfig.TelegramChatID, message, latestTags, id)
+		} else {
+			log.Printf("✅ %s is actual. Current tag: %s", fullImageName, serviceInfo.ImageInfo.Tag)
 		}
 	}
 }
