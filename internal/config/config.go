@@ -31,6 +31,14 @@ type AppConfig struct {
 
 // LoadConfig loads configuration from a YAML file and overrides values with environment variables.
 func LoadConfig(path string) (*AppConfig, error) {
+	// Bind environment variables to your struct fields
+	// This allows env vars to override values from the config file
+	viper.BindEnv("docker_user", "CONTROLLA__DOCKERHUB__USERNAME")
+	viper.BindEnv("docker_pass", "CONTROLLA__DOCKERHUB__PASSWORD")
+	viper.BindEnv("github_token", "CONTROLLA__GITHUB__TOKEN")
+	viper.BindEnv("telegram_token", "CONTROLLA__TELEGRAM__TOKEN")
+	viper.BindEnv("telegram_chat_id", "CONTROLLA__TELEGRAM__CHAT__ID")
+
 	viper.SetConfigFile(path)
 	viper.SetConfigType("yaml")
 
@@ -43,14 +51,6 @@ func LoadConfig(path string) (*AppConfig, error) {
 			return nil, fmt.Errorf("error reading config: %w", err)
 		}
 	}
-
-	// Bind environment variables to your struct fields
-	// This allows env vars to override values from the config file
-	viper.BindEnv("docker_user", "CONTROLLA__DOCKERHUB__USERNAME")
-	viper.BindEnv("docker_pass", "CONTROLLA__DOCKERHUB__PASSWORD")
-	viper.BindEnv("github_token", "CONTROLLA__GITHUB__TOKEN")
-	viper.BindEnv("telegram_token", "CONTROLLA__TELEGRAM__TOKEN")
-	viper.BindEnv("telegram_chat_id", "CONTROLLA__TELEGRAM__CHAT__ID")
 
 	// Unmarshal the config into the struct
 	var config AppConfig

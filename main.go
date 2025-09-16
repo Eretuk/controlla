@@ -44,16 +44,22 @@ func main() {
 	}
 	log.Println("Configuration loaded successfully.")
 
+	log.Printf("Loaded Telegram Token: '%s'", appConfig.TelegramToken)
+	bot, err := tgbotapi.NewBotAPI(appConfig.TelegramToken)
+	if err != nil {
+		log.Fatalf("Error creating Telegram bot API client: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go startTelegramListener(ctx, appConfig.TelegramToken)
+	go startTelegramListener(ctx, bot)
 
 	log.Println("Starting image update check...")
-	checkUpdates(appConfig)
+	checkUpdates(appConfig, bot)
 
 	log.Println("Image check completed. Waiting for termination signal...")
 	<-sigChan
@@ -105,13 +111,7 @@ func main() {
 // }
 
 // startTelegramListener запускает слушателя для Telegram API.
-func startTelegramListener(ctx context.Context, token string) {
-	bot, err := tgbotapi.NewBotAPI(token)
-	if err != nil {
-		log.Printf("Error creating Telegram bot API client: %v", err)
-		return
-	}
-
+func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI) {
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 60
 
@@ -182,7 +182,7 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery)
 	}
 }
 
-func checkUpdates(appConfig *config.AppConfig) {
+func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI) {
 	// 1. Клонируем или обновляем репозиторий
 	repoPath := appConfig.Git.LocalRepoPath
 	log.Printf("Cloning repository %s to %s", appConfig.Git.RepoURL, repoPath)
@@ -218,6 +218,7 @@ func checkUpdates(appConfig *config.AppConfig) {
 	log.Printf("Found a total of %d unique images", len(servicesByImage))
 
 	// 5. Проверяем обновления для каждого уникального образа
+	dockerhubClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
 	for fullImageName, services := range servicesByImage {
 		serviceInfo := services[0] // Берем первый сервис из группы для проверки
 
@@ -230,14 +231,14 @@ func checkUpdates(appConfig *config.AppConfig) {
 		}
 
 		// Получаем список тегов из Docker Hub
-		tags, err := registry.GetTags(fullImageName, appConfig.DockerUser, appConfig.DockerPass)
+		tags, err := dockerhubClient.GetTags(serviceInfo.ImageInfo.Image)
 		if err != nil {
-			log.Printf("Error getting tags for %s: %v", fullImageName, err)
+			log.Printf("Error getting tags for %s: %v", serviceInfo.ImageInfo.Image, err)
 			continue
 		}
 
 		// Фильтруем теги по SemVer
-		latestTags := versionutils.FilterSemVerTags(tags)
+		latestTags := versionutils.GetLatestTags(tags, appConfig.Checker.ProposedTagsCount)
 		if len(latestTags) == 0 {
 			log.Printf("⚠️ Can't check updates for %s. No SemVer tags found.", fullImageName)
 			continue
@@ -267,10 +268,9 @@ func checkUpdates(appConfig *config.AppConfig) {
 			}
 			cacheMutex.Unlock()
 
-			message := fmt.Sprintf("🚨 Обновление для образа **%s**\nТекущая версия: `%s`\nДоступная версия: `%s`", fullImageName, serviceInfo.ImageInfo.Tag, latestAvailable)
-
+			message := fmt.Sprintf("🚨 New update for %s\nCurrent version: `%s`\nAvaliable version: `%s`", fullImageName, serviceInfo.ImageInfo.Tag, latestAvailable)
 			// Отправляем сообщение, передавая ID
-			notifier.SendInteractiveMessage(appConfig.TelegramToken, appConfig.TelegramChatID, message, latestTags, id)
+			notifier.SendInteractiveMessage(bot, appConfig.TelegramChatID, message, latestTags, id)
 		} else {
 			log.Printf("✅ %s is actual. Current tag: %s", fullImageName, serviceInfo.ImageInfo.Tag)
 		}

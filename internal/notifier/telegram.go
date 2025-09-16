@@ -26,12 +26,7 @@ func SendTelegramMessage(token, chatID string, message string) {
 }
 
 // SendInteractiveMessage отправляет сообщение с inline-кнопками.
-func SendInteractiveMessage(token, chatID string, message string, latestTags []string, id string) {
-	bot, err := tgbotapi.NewBotAPI(token)
-	if err != nil {
-		log.Printf("Error creating Telegram bot: %v", err)
-		return
-	}
+func SendInteractiveMessage(bot *tgbotapi.BotAPI, chatID string, message string, latestTags []string, id string) {
 
 	msg := tgbotapi.NewMessageToChannel(chatID, message)
 	msg.ParseMode = tgbotapi.ModeMarkdown // Включаем Markdown для форматирования
@@ -53,7 +48,7 @@ func SendInteractiveMessage(token, chatID string, message string, latestTags []s
 
 	msg.ReplyMarkup = keyboard
 
-	_, err = bot.Send(msg)
+	_, err := bot.Send(msg)
 	if err != nil {
 		log.Printf("Error sending interactive message to Telegram: %v", err)
 	} else {
