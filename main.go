@@ -153,7 +153,8 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery)
 			return
 		}
 		// Вызываем нашу новую функцию
-		err := updater.UpdateAndPushService(info.RepoPath, info.FilePath, info.ServiceName, info.NewTag) // NewTag нужно получить из кнопок
+		serviceInfo := info.Services[0]
+		err := updater.UpdateAndPushService(info.RepoPath, serviceInfo.FilePath, serviceInfo.ServiceName, info.NewTag)
 		if err != nil {
 			log.Printf("Error updating and pushing: %v", err)
 			// Отправь сообщение об ошибке в Telegram

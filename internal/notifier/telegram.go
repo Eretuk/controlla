@@ -26,7 +26,7 @@ func SendTelegramMessage(token, chatID string, message string) {
 }
 
 // SendInteractiveMessage отправляет сообщение с inline-кнопками.
-func SendInteractiveMessage(token, chatID string, message string, latestTags []string) {
+func SendInteractiveMessage(token, chatID string, message string, latestTags []string, id string) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		log.Printf("Error creating Telegram bot: %v", err)
@@ -38,7 +38,7 @@ func SendInteractiveMessage(token, chatID string, message string, latestTags []s
 
 	var buttons []tgbotapi.InlineKeyboardButton
 	for _, tag := range latestTags {
-		button := tgbotapi.NewInlineKeyboardButtonData(tag, "update_to:"+tag)
+		button := tgbotapi.NewInlineKeyboardButtonData(tag, "update_to:"+id+":"+tag)
 		buttons = append(buttons, button)
 	}
 
