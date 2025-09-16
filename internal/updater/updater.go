@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"gopkg.in/yaml.v3"
 )
 
 // UpdateAndPushService обновляет тег в файле docker-compose и пушит изменения в репозиторий.
-func UpdateAndPushService(repoPath, filePath, serviceName, newTag string) error {
+func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKeyPath string) error {
 	log.Printf("Starting update for service '%s' in file '%s' to tag '%s'", serviceName, filePath, newTag)
 
 	// 1. Читаем и парсим файл docker-compose.yaml
@@ -52,15 +54,20 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string) error 
 	// 4. Коммитим и пушим изменения
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("could not open git repository at %s: %w", repoPath, err)
+		return fmt.Errorf("failed to open Git repository: %w", err)
 	}
 
 	worktree, err := repo.Worktree()
 	if err != nil {
-		return fmt.Errorf("could not get worktree: %w", err)
+		return fmt.Errorf("failed to get worktree: %w", err)
 	}
 
-	_, err = worktree.Add(filePath)
+	relativePath, err := filepath.Rel(repoPath, filePath)
+	if err != nil {
+		return fmt.Errorf("could not get relative path: %w", err)
+	}
+
+	_, err = worktree.Add(relativePath)
 	if err != nil {
 		return fmt.Errorf("could not add file to git: %w", err)
 	}
@@ -71,8 +78,13 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string) error 
 	}
 	log.Printf("New commit created: %s", commit)
 
+	publicKeys, err := ssh.NewPublicKeysFromFile("git", SSHKeyPath, "")
+	if err != nil {
+		return fmt.Errorf("failed to read SSH key: %w", err)
+	}
+	auth := publicKeys
 	err = repo.Push(&git.PushOptions{
-		// Здесь можно добавить аутентификацию, если она требуется для пуша
+		Auth: auth,
 	})
 	if err != nil {
 		return fmt.Errorf("could not push changes: %w", err)

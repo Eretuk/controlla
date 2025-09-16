@@ -44,7 +44,6 @@ func main() {
 	}
 	log.Println("Configuration loaded successfully.")
 
-	log.Printf("Loaded Telegram Token: '%s'", appConfig.TelegramToken)
 	bot, err := tgbotapi.NewBotAPI(appConfig.TelegramToken)
 	if err != nil {
 		log.Fatalf("Error creating Telegram bot API client: %v", err)
@@ -56,7 +55,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go startTelegramListener(ctx, bot)
+	go startTelegramListener(ctx, bot, appConfig)
 
 	log.Println("Starting image update check...")
 	checkUpdates(appConfig, bot)
@@ -111,7 +110,7 @@ func main() {
 // }
 
 // startTelegramListener запускает слушателя для Telegram API.
-func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI) {
+func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI, appConfig *config.AppConfig) {
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 60
 
@@ -127,58 +126,57 @@ func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI) {
 		case update := <-updates:
 			// Здесь мы будем обрабатывать нажатия на кнопки
 			if update.CallbackQuery != nil {
-				handleCallbackQuery(bot, update.CallbackQuery)
+				handleCallbackQuery(bot, update.CallbackQuery, appConfig)
 			}
 		}
 	}
 }
 
 // handleCallbackQuery обрабатывает нажатие на inline-кнопку.
-func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery) {
+func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig) {
 	callbackData := callback.Data
-	chatID := callback.Message.Chat.ID
-	messageID := callback.Message.MessageID
 
-	log.Printf("Received callback query: %s from user %s", callbackData, callback.From.UserName)
-
-	// Здесь мы будем парсить данные
 	if strings.HasPrefix(callbackData, "update_to:") {
-		id := strings.TrimPrefix(callbackData, "update_to:")
+		// Парсим ID и NewTag из callbackData
+		parts := strings.Split(callbackData, ":")
+		if len(parts) != 3 {
+			log.Printf("Invalid callback data format: %s", callbackData)
+			return
+		}
+		id := parts[1]
+		newTag := parts[2]
+
 		// Получаем информацию из кеша
 		cacheMutex.Lock()
 		info, ok := updateCache[id]
 		cacheMutex.Unlock()
+
 		if !ok {
-			log.Printf("Error: Update info for ID %s not found in cache.", id)
+			log.Printf("Error: Update info for ID %s not found in cache. Callback Data: %s", id, callbackData)
 			return
 		}
-		// Вызываем нашу новую функцию
-		serviceInfo := info.Services[0]
-		err := updater.UpdateAndPushService(info.RepoPath, serviceInfo.FilePath, serviceInfo.ServiceName, info.NewTag)
-		if err != nil {
-			log.Printf("Error updating and pushing: %v", err)
-			// Отправь сообщение об ошибке в Telegram
-		} else {
-			// Отправь сообщение об успехе
+
+		// Отправляем сообщение об обработке
+		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, fmt.Sprintf("Processing update for %s to version %s...", info.Services[0].ImageInfo.Image, newTag))
+		msg.ReplyToMessageID = callback.Message.MessageID
+		bot.Send(msg)
+
+		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Перебираем все сервисы, которые используют этот образ
+		for _, service := range info.Services {
+			log.Printf("Updating service %s in file %s to tag %s", service.ServiceName, service.FilePath, newTag)
+
+			// Вызываем функцию для каждого отдельного сервиса с правильными аргументами
+			err := updater.UpdateAndPushService(info.RepoPath, service.FilePath, service.ServiceName, newTag, appConfig.Git.SSHKeyPath)
+			if err != nil {
+				log.Printf("Error updating service %s: %v", service.ServiceName, err)
+				notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Update failed for service %s: %v", service.ServiceName, err))
+				// Мы не завершаем работу, чтобы попытаться обновить остальные сервисы, если они есть
+			} else {
+				log.Println("Update successful!")
+				notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
+			}
 		}
-		versionToUpdate := strings.TrimPrefix(callbackData, "update_to:")
-		// В будущем, здесь ты будешь запускать скрипт обновления
-		log.Printf("Request to update to version %s received. ChatID: %d, MessageID: %d", versionToUpdate, chatID, messageID)
 
-		// Отправляем ответ, чтобы убрать "часики" с кнопки
-		answerCallback := tgbotapi.NewCallback(callback.ID, "Обновление запущено!")
-		bot.Send(answerCallback)
-
-		// Отправляем новое сообщение, подтверждающее действие
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Начинаю обновление до версии `%s`...", versionToUpdate))
-		msg.ParseMode = tgbotapi.ModeMarkdown
-		bot.Send(msg)
-	} else if callbackData == "ignore" {
-		log.Printf("Request to ignore update received. ChatID: %d, MessageID: %d", chatID, messageID)
-		answerCallback := tgbotapi.NewCallback(callback.ID, "Запрос проигнорирован.")
-		bot.Send(answerCallback)
-		msg := tgbotapi.NewMessage(chatID, "Запрос на обновление проигнорирован.")
-		bot.Send(msg)
 	}
 }
 

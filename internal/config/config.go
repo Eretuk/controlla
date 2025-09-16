@@ -9,11 +9,11 @@ import (
 
 // AppConfig holds all application-wide configuration from environment variables.
 type AppConfig struct {
-	DockerUser     string
-	DockerPass     string
-	GithubToken    string
-	TelegramToken  string
-	TelegramChatID string
+	DockerUser     string `mapstructure:"docker_user"`
+	DockerPass     string `mapstructure:"docker_pass"`
+	GithubToken    string `mapstructure:"github_token"`
+	TelegramToken  string `mapstructure:"telegram_token"`
+	TelegramChatID string `mapstructure:"telegram_chat_id"`
 	Git            struct {
 		RepoURL       string `mapstructure:"repo_url"`
 		Branch        string `mapstructure:"branch"`
