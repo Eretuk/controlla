@@ -14,7 +14,7 @@ func SortAndFilterTags(tags []string, n int) []string {
 	re := regexp.MustCompile(`^(\d+\.\d+\.\d+.*)`)
 
 	for _, tag := range tags {
-		// Используем более гибкую логику для обработки тегов типа "1.29.1-alpine"
+		// More flexible logic for type "1.29.1-alpine"
 		if re.MatchString(tag) {
 			v, err := semver.NewVersion(strings.Split(tag, "-")[0])
 			if err == nil {

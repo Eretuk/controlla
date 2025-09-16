@@ -16,9 +16,6 @@ type DockerTagsResponse struct {
 // DockerTag represents a single tag object in the JSON response.
 type DockerTag struct {
 	Name string `json:"name"`
-	// Добавь другие поля, если они нужны, например:
-	// FullSize int       `json:"full_size"`
-	// LastUpdated time.Time `json:"last_updated"`
 }
 
 // DockerAuthResponse represents the JSON response from the Docker Hub auth endpoint.
