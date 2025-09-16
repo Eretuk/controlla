@@ -10,10 +10,10 @@ import (
 )
 
 type ImageInfo struct {
-	Path    string // полный путь до docker-compose.yml
-	Name    string // образ целиком
-	Host    string // имя хоста (напр. "auth-stack")
-	Service string // имя сервиса (напр. "authelia")
+	Path    string
+	Name    string
+	Host    string
+	Service string
 }
 
 func FindImagesInCompose(root string) ([]ImageInfo, error) {
@@ -28,7 +28,7 @@ func FindImagesInCompose(root string) ([]ImageInfo, error) {
 	for _, path := range matches {
 		parts := strings.Split(filepath.ToSlash(path), "/")
 		if len(parts) < 4 {
-			continue // должно быть как минимум repos/myrepo/services/host/service/docker-compose.yml
+			continue
 		}
 		host := parts[len(parts)-3]
 		service := parts[len(parts)-2]
@@ -65,4 +65,39 @@ func FindImagesInCompose(root string) ([]ImageInfo, error) {
 	}
 
 	return images, nil
+}
+
+// FindRelevantFiles recursively searches a directory for specific file types.
+// It returns a slice of absolute paths to the files found.
+func FindRelevantFiles(searchDir string) ([]string, error) {
+	var filePaths []string
+
+	err := filepath.WalkDir(searchDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			// This handles errors during traversal, such as permissions issues.
+			return fmt.Errorf("error accessing path %q: %v", path, err)
+		}
+
+		// Skip directories
+		if d.IsDir() {
+			return nil
+		}
+
+		// Check for specific file names or patterns.
+		// You can easily add more conditions here.
+		fileName := d.Name()
+		if fileName == "docker-compose.yml" ||
+			fileName == "docker-compose.yaml" ||
+			fileName == "Dockerfile" {
+			filePaths = append(filePaths, path)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return filePaths, nil
 }

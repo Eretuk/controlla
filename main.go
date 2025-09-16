@@ -1,10 +1,13 @@
 package main
 
 import (
+	"controlla/internal/checker"
 	"controlla/internal/config"
+	"controlla/internal/gitrepo"
 	"controlla/internal/registry"
 	"controlla/internal/versionutils"
 	"log"
+	"path/filepath"
 
 	"github.com/sirupsen/logrus"
 )
@@ -24,7 +27,38 @@ func main() {
 	logrus.Info("Start loading env variables")
 	appConfig := config.LoadFromEnv()
 	logrus.Info("Env variables loaded")
-	logrus.Infof("Controlla started. Checking every %d minutes.", cfg.Checker.IntervalMinutes)
+	repoPath := "./repos/myrepo"
+
+	log.Printf("Cloning repository %s to %s", cfg.Git.RepoURL, repoPath)
+	err = gitrepo.CloneOrPull(cfg.Git.RepoURL, cfg.Git.Branch, repoPath, cfg.Git.SSHKeyPath)
+	if err != nil {
+		log.Fatalf("Failed to clone repository: %v", err)
+	}
+	log.Println("Repository cloned successfully.")
+
+	// Now, define the folder to watch based on your config.
+	// We construct the full path by joining the local repo path and the watch folder from config.
+	watchPath := filepath.Join(repoPath, cfg.Checker.WatchFolder)
+
+	// Find all relevant files within the specified watch folder.
+	log.Printf("Scanning for files in %s...", watchPath)
+	foundFiles, err := checker.FindRelevantFiles(watchPath)
+	if err != nil {
+		log.Fatalf("Failed to find files in watch folder: %v", err)
+	}
+
+	log.Printf("Found %d relevant files:", len(foundFiles))
+	for _, file := range foundFiles {
+		log.Println(file)
+	}
+	// log.Println("Scanning cloned repository for images...")
+	// foundImages, err := checker.FindImagesInCompose(repoPath)
+	// if err != nil {
+	// 	log.Fatalf("Failed to find images in repository: %v", err)
+	// }
+
+	// log.Printf("Found %d images: %v", len(foundImages), foundImages)
+	// logrus.Infof("Controlla started. Checking every %d minutes.", cfg.Checker.IntervalMinutes)
 
 	// 2. Create clients
 	dockerClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
