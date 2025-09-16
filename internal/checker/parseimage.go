@@ -1,46 +1,52 @@
 package checker
 
-import (
-	"strings"
-)
+import "strings"
 
 type ParsedImage struct {
-	Full      string
-	Registry  string
-	Namespace string
-	Name      string
-	Tag       string
+	Registry string
+	Image    string
+	Tag      string
+	Digest   string
 }
 
-func ParseImageName(image string) ParsedImage {
-	out := ParsedImage{Full: image}
+// ParseDockerImage takes a full image string and breaks it into its components.
+func ParseDockerImage(imageString string) ParsedImage {
+	parsed := ParsedImage{}
 
-	// 1. tag (после : )
-	tagSplit := strings.Split(image, ":")
-	repo := tagSplit[0]
-	if len(tagSplit) > 1 {
-		out.Tag = tagSplit[1]
+	// Step 1: Separate the digest and the image/tag part.
+	partsWithDigest := strings.Split(imageString, "@sha256:")
+	if len(partsWithDigest) > 1 {
+		parsed.Image = partsWithDigest[0]
+		parsed.Digest = partsWithDigest[1]
 	} else {
-		out.Tag = "latest"
+		parsed.Image = imageString
 	}
 
-	// 2. разбить на части
-	parts := strings.Split(repo, "/")
-
-	switch len(parts) {
-	case 1:
-		out.Registry = "docker.io"
-		out.Namespace = "library"
-		out.Name = parts[0]
-	case 2:
-		out.Registry = "docker.io"
-		out.Namespace = parts[0]
-		out.Name = parts[1]
-	default:
-		out.Registry = parts[0]
-		out.Namespace = parts[1]
-		out.Name = strings.Join(parts[2:], "/")
+	// Step 2: Separate the tag and the image part.
+	partsWithTag := strings.Split(parsed.Image, ":")
+	if len(partsWithTag) > 1 {
+		// A tag must not contain a slash unless it's a registry port.
+		// For example, ghcr.io:5000/image:tag
+		if strings.Contains(partsWithTag[len(partsWithTag)-1], "/") {
+			// This is likely a registry with a port, not a tag.
+			// Leave the tag as empty and handle the registry/image separation later.
+		} else {
+			parsed.Image = strings.Join(partsWithTag[:len(partsWithTag)-1], ":")
+			parsed.Tag = partsWithTag[len(partsWithTag)-1]
+		}
+	} else {
+		parsed.Tag = "latest"
 	}
 
-	return out
+	// Step 3: Separate the registry from the image name.
+	if strings.Contains(parsed.Image, "/") {
+		split := strings.SplitN(parsed.Image, "/", 2)
+		parsed.Registry = split[0]
+		parsed.Image = split[1]
+	} else {
+		parsed.Registry = "docker.io"
+		parsed.Image = "library/" + parsed.Image
+	}
+
+	return parsed
 }

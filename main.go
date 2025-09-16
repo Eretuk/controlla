@@ -48,35 +48,71 @@ func main() {
 	}
 
 	log.Printf("Found %d relevant files:", len(foundFiles))
-	for _, file := range foundFiles {
-		log.Println(file)
-	}
-	// log.Println("Scanning cloned repository for images...")
-	// foundImages, err := checker.FindImagesInCompose(repoPath)
-	// if err != nil {
-	// 	log.Fatalf("Failed to find images in repository: %v", err)
+	// for _, file := range foundFiles {
+	// 	log.Println(file)
 	// }
 
-	// log.Printf("Found %d images: %v", len(foundImages), foundImages)
+	var allImages []string
+
+	// Iterate through the list of found files and parse each one.
+	log.Printf("Parsing relevant files for images...")
+	for _, file := range foundFiles {
+		imagesInFile, err := checker.FindImagesFromCompose(file)
+		if err != nil {
+			log.Printf("Warning: Failed to parse images from %s: %v", file, err)
+			continue // Continue to the next file if one fails.
+		}
+
+		allImages = append(allImages, imagesInFile...)
+	}
+	// Now, you can remove duplicates and then check each image against Docker Hub.
+	uniqueImages := make(map[string]bool)
+	var finalImageList []string
+	for _, image := range allImages {
+		if _, exists := uniqueImages[image]; !exists {
+			uniqueImages[image] = true
+			finalImageList = append(finalImageList, image)
+		}
+	}
+	// log.Printf("Found a total of %d unique images: %v", len(finalImageList), finalImageList)
+	log.Printf("Found a total of %d unique images", len(finalImageList))
+
+	// Step 3: Iterate through the list of unique images and parse each one.
+	for _, imageString := range finalImageList {
+		parsedImage := checker.ParseDockerImage(imageString)
+
+		// Build the log message dynamically
+		logMsg := "Parsed image: Registry=%s, Image=%s, Tag=%s"
+		logArgs := []interface{}{parsedImage.Registry, parsedImage.Image, parsedImage.Tag}
+
+		if parsedImage.Digest != "" {
+			logMsg += ", Digest=%s"
+			logArgs = append(logArgs, parsedImage.Digest)
+		}
+
+		log.Printf(logMsg, logArgs...)
+		if parsedImage.Registry == "docker.io" {
+			dockerClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
+			tags, err := dockerClient.GetTags(parsedImage.Image)
+			if err != nil {
+				log.Printf("Error getting Docker Hub tags for %s: %v", parsedImage.Image, err)
+				return
+			}
+			// Add check for empty tags from DockerHub
+			if len(tags) == 0 {
+				log.Printf("No tags found for image %s", parsedImage.Image)
+				continue
+			}
+			latestTags := versionutils.GetLatestTags(tags, cfg.Checker.ProposedTagsCount)
+			log.Printf("Docker Hub tags for %s: %v", parsedImage.Image, latestTags)
+		} else {
+			log.Printf("Skipping image %s: registry %s is not yet supported.", imageString, parsedImage.Registry)
+		}
+	}
 	// logrus.Infof("Controlla started. Checking every %d minutes.", cfg.Checker.IntervalMinutes)
 
 	// 2. Create clients
-	dockerClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
 	// ghcrClient := registry.NewGhcrClient(appConfig.GithubToken)
-
-	// 3. Use the clients to get tags (example)
-	if appConfig.DockerUser != "" {
-		dockerImage := "authelia/authelia"
-		tags, err := dockerClient.GetTags(dockerImage)
-		if err != nil {
-			log.Printf("Error getting Docker Hub tags for %s: %v", dockerImage, err)
-			return
-		}
-		latestTags := versionutils.SortAndFilterTags(tags, 5)
-		// Getiing results
-		log.Printf("Docker Hub tags for %s: %v", dockerImage, latestTags)
-
-	}
 
 	// if appConfig.GithubToken != "" {
 	// 	ghcrImage := "authelia/authelia" // your ghcr image

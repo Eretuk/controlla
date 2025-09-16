@@ -28,9 +28,10 @@ type Config struct {
 	} `mapstructure:"git"`
 
 	Checker struct {
-		WatchFolder     string `mapstructure:"watch_folder"`
-		IntervalMinutes int    `mapstructure:"interval_minutes"`
-		SkipListFile    string `mapstructure:"skip_list_file"`
+		WatchFolder       string `mapstructure:"watch_folder"`
+		ProposedTagsCount int    `mapstructure:"proposed_tags_count"`
+		IntervalMinutes   int    `mapstructure:"interval_minutes"`
+		SkipListFile      string `mapstructure:"skip_list_file"`
 	} `mapstructure:"checker"`
 }
 

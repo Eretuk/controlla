@@ -9,5 +9,6 @@ git:
 
 checker:
   watch_folder: services
+  proposed_tags_count: 3
   interval_minutes: 1
   skip_list_file: "skipped.json"
