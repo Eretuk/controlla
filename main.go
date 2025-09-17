@@ -183,6 +183,13 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI) {
 	// 1. Клонируем или обновляем репозиторий
 	repoPath := appConfig.Git.LocalRepoPath
+	if _, err := os.Stat(appConfig.Git.LocalRepoPath); err == nil {
+		log.Println("Removing old repository clone...")
+		err := os.RemoveAll(appConfig.Git.LocalRepoPath)
+		if err != nil {
+			log.Printf("Failed to remove old repository: %v", err)
+		}
+	}
 	log.Printf("Cloning repository %s to %s", appConfig.Git.RepoURL, repoPath)
 	err := gitrepo.CloneOrPull(appConfig.Git.RepoURL, appConfig.Git.Branch, repoPath, appConfig.Git.SSHKeyPath)
 	if err != nil {
