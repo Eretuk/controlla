@@ -70,7 +70,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go startTelegramListener(ctx, bot, appConfig)
+	go startTelegramListener(ctx, bot, appConfig, skipList)
 
 	log.Println("Starting image update check...")
 	checkUpdates(appConfig, bot, skipList)
@@ -125,7 +125,7 @@ func main() {
 // }
 
 // startTelegramListener запускает слушателя для Telegram API.
-func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI, appConfig *config.AppConfig) {
+func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI, appConfig *config.AppConfig, skipList *skiplist.SkipList) {
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 60
 
@@ -139,16 +139,16 @@ func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI, appConfig 
 			log.Println("Telegram listener is shutting down.")
 			return
 		case update := <-updates:
-			// Здесь мы будем обрабатывать нажатия на кнопки
+			// Передаем skipList дальше
 			if update.CallbackQuery != nil {
-				handleCallbackQuery(bot, update.CallbackQuery, appConfig)
+				handleCallbackQuery(bot, update.CallbackQuery, appConfig, skipList)
 			}
 		}
 	}
 }
 
 // handleCallbackQuery обрабатывает нажатие на inline-кнопку.
-func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig) {
+func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig, skipList *skiplist.SkipList) {
 	callbackData := callback.Data
 
 	if strings.HasPrefix(callbackData, "update_to:") {
@@ -196,16 +196,16 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 				notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
 			}
 		}
-	} else if strings.HasPrefix(callbackData, "skip_update:") {
-		id := strings.TrimPrefix(callbackData, "skip_update:")
+	} else if strings.HasPrefix(callbackData, "ignore") {
+		id := strings.TrimPrefix(callbackData, "ignore")
 		// Получаем информацию из кеша
 		cacheMutex.Lock()
 		info, ok := updateCache[id]
 		cacheMutex.Unlock()
 		if ok {
-			// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Добавляем обновление в список пропусков
+			// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Используем skipList для вызова метода Add
 			fullImageName := registry.GetFullImageName(&info.Services[0].ImageInfo)
-			err := skiplist.Add(fullImageName, info.NewTag)
+			err := skipList.Add(fullImageName, info.NewTag)
 			if err != nil {
 				log.Printf("Error adding update to skip list: %v", err)
 			}
