@@ -24,17 +24,15 @@ func SendInteractiveMessage(bot *tgbotapi.BotAPI, chatID string, message string,
 	msg := tgbotapi.NewMessageToChannel(chatID, message)
 	msg.ParseMode = tgbotapi.ModeMarkdown // Включаем Markdown для форматирования
 
-	// Создаем кнопки
 	var buttons []tgbotapi.InlineKeyboardButton
 	for _, tag := range latestTags {
 		button := tgbotapi.NewInlineKeyboardButtonData(tag, "update_to:"+id+":"+tag)
 		buttons = append(buttons, button)
 	}
 
-	// Создаём клавиатуру с кнопками
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(buttons...),
-		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Добавляем ID к кнопке "Ignore"
+		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Возвращаем старый, короткий формат callback_data
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Ignore this update", "ignore:"+id),
 		),

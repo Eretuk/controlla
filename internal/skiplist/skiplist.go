@@ -1,3 +1,5 @@
+// В файле internal/skiplist/skiplist.go
+
 package skiplist
 
 import (
@@ -14,17 +16,23 @@ type SkippedUpdate struct {
 	NewTag string `yaml:"new_tag"`
 }
 
+// fileData представляет структуру, которая будет храниться в файле.
+type fileData struct {
+	Updates []SkippedUpdate `yaml:"updates"`
+}
+
 // SkipList управляет списком пропущенных обновлений.
 type SkipList struct {
 	sync.Mutex
-	Path    string
-	Updates []SkippedUpdate `yaml:"updates"`
+	Path string
+	data *fileData
 }
 
 // NewSkipList создает новый экземпляр SkipList.
 func NewSkipList(path string) *SkipList {
 	return &SkipList{
 		Path: path,
+		data: &fileData{},
 	}
 }
 
@@ -41,7 +49,8 @@ func (sl *SkipList) Load() error {
 		return fmt.Errorf("failed to read skip list file: %w", err)
 	}
 
-	return yaml.Unmarshal(data, &sl.Updates)
+	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Загружаем данные в единую структуру
+	return yaml.Unmarshal(data, sl.data)
 }
 
 // Add добавляет обновление в список и сохраняет его в файл.
@@ -50,18 +59,19 @@ func (sl *SkipList) Add(image, newTag string) error {
 	defer sl.Unlock()
 
 	// Проверяем, не было ли уже добавлено это обновление
-	for _, update := range sl.Updates {
+	for _, update := range sl.data.Updates {
 		if update.Image == image && update.NewTag == newTag {
 			return nil
 		}
 	}
 
-	sl.Updates = append(sl.Updates, SkippedUpdate{
+	sl.data.Updates = append(sl.data.Updates, SkippedUpdate{
 		Image:  image,
 		NewTag: newTag,
 	})
 
-	data, err := yaml.Marshal(&sl)
+	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Сериализуем и записываем единую структуру
+	data, err := yaml.Marshal(sl.data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal skip list: %w", err)
 	}
@@ -74,7 +84,7 @@ func (sl *SkipList) IsSkipped(image, newTag string) bool {
 	sl.Lock()
 	defer sl.Unlock()
 
-	for _, update := range sl.Updates {
+	for _, update := range sl.data.Updates {
 		if update.Image == image && update.NewTag == newTag {
 			return true
 		}

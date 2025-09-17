@@ -53,10 +53,21 @@ func main() {
 		}
 	}
 
-	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Загружаем список пропущенных обновлений
-	skipList := skiplist.NewSkipList(appConfig.Checker.SkipListFile)
-	if err := skipList.Load(); err != nil {
-		log.Fatalf("Error loading skip list: %v", err)
+	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Инициализируем и загружаем список пропусков
+	sl := skiplist.NewSkipList(appConfig.Checker.SkipListFile)
+	if err := sl.Load(); err != nil {
+		log.Printf("Error loading skip list: %v", err)
+	} else {
+		log.Println("Skip list loaded successfully.")
+	}
+
+	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Явно создаем файл, если его нет
+	if _, err := os.Stat(appConfig.Checker.SkipListFile); os.IsNotExist(err) {
+		log.Printf("Skip list file '%s' not found, creating it...", appConfig.Checker.SkipListFile)
+		// os.Create создаст пустой файл, что достаточно для начала
+		if _, err := os.Create(appConfig.Checker.SkipListFile); err != nil {
+			log.Fatalf("Failed to create skip list file: %v", err)
+		}
 	}
 
 	bot, err := tgbotapi.NewBotAPI(appConfig.TelegramToken)
@@ -70,10 +81,10 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go startTelegramListener(ctx, bot, appConfig, skipList)
+	go startTelegramListener(ctx, bot, appConfig, sl)
 
 	log.Println("Starting image update check...")
-	checkUpdates(appConfig, bot, skipList)
+	checkUpdates(appConfig, bot, sl)
 
 	log.Println("Image check completed. Waiting for termination signal...")
 	<-sigChan
@@ -196,22 +207,26 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 				notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
 			}
 		}
-	} else if strings.HasPrefix(callbackData, "ignore") {
-		id := strings.TrimPrefix(callbackData, "ignore")
-		// Получаем информацию из кеша
+	} else if strings.HasPrefix(callbackData, "ignore:") {
+		id := strings.TrimPrefix(callbackData, "ignore:")
+
+		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Обращаемся к кешу, чтобы получить полную информацию об образе
 		cacheMutex.Lock()
 		info, ok := updateCache[id]
 		cacheMutex.Unlock()
+
 		if ok {
-			// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Используем skipList для вызова метода Add
 			fullImageName := registry.GetFullImageName(&info.Services[0].ImageInfo)
 			err := skipList.Add(fullImageName, info.NewTag)
 			if err != nil {
 				log.Printf("Error adding update to skip list: %v", err)
+			} else {
+				log.Printf("Successfully added %s to skip list.", fullImageName)
 			}
+		} else {
+			// Если информация в кеше не найдена, логируем ошибку
+			log.Printf("Error: Update info for ID %s not found in cache. The program may have been restarted.", id)
 		}
-		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Логика для кнопки "Skip"
-		log.Printf("Received skip request for update ID: %s", strings.TrimPrefix(callbackData, "skip_update:"))
 
 		// Отправляем пользователю подтверждение и удаляем исходное сообщение
 		deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
@@ -220,7 +235,6 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 			log.Printf("Error deleting message: %v", err)
 		}
 
-		// Дополнительно можно отправить сообщение, что обновление пропущено
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "✅ Update skipped.")
 		msg.ReplyToMessageID = callback.Message.MessageID
 		bot.Send(msg)
