@@ -79,7 +79,7 @@ func (sl *SkipList) Add(image, newTag string) error {
 	return os.WriteFile(sl.Path, data, 0644)
 }
 
-// IsSkipped проверяет, есть ли обновление в списке пропущенных.
+// IsSkipped проверяет, находится ли обновление в списке пропущенных.
 func (sl *SkipList) IsSkipped(image, newTag string) bool {
 	sl.Lock()
 	defer sl.Unlock()

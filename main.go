@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,15 +46,7 @@ func main() {
 	}
 	log.Println("Configuration loaded successfully.")
 
-	if _, err := os.Stat(appConfig.Git.LocalRepoPath); err == nil {
-		log.Println("Removing old repository clone...")
-		err := os.RemoveAll(appConfig.Git.LocalRepoPath)
-		if err != nil {
-			log.Printf("Failed to remove old repository: %v", err)
-		}
-	}
-
-	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Инициализируем и загружаем список пропусков
+	// 🚨 ИСПРАВЛЕНИЕ: Инициализируем и загружаем список пропусков.
 	sl := skiplist.NewSkipList(appConfig.Checker.SkipListFile)
 	if err := sl.Load(); err != nil {
 		log.Printf("Error loading skip list: %v", err)
@@ -61,18 +54,11 @@ func main() {
 		log.Println("Skip list loaded successfully.")
 	}
 
-	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Явно создаем файл, если его нет
-	if _, err := os.Stat(appConfig.Checker.SkipListFile); os.IsNotExist(err) {
-		log.Printf("Skip list file '%s' not found, creating it...", appConfig.Checker.SkipListFile)
-		// os.Create создаст пустой файл, что достаточно для начала
-		if _, err := os.Create(appConfig.Checker.SkipListFile); err != nil {
-			log.Fatalf("Failed to create skip list file: %v", err)
+	if _, err := os.Stat(appConfig.Git.LocalRepoPath); err == nil {
+		log.Println("Removing old repository clone...")
+		if err := os.RemoveAll(appConfig.Git.LocalRepoPath); err != nil {
+			log.Fatalf("Error removing old repository: %v", err)
 		}
-	}
-
-	bot, err := tgbotapi.NewBotAPI(appConfig.TelegramToken)
-	if err != nil {
-		log.Fatalf("Error creating Telegram bot API client: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,85 +67,183 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go startTelegramListener(ctx, bot, appConfig, sl)
+	go func() {
+		<-sigChan
+		log.Println("Shutting down...")
+		cancel()
+	}()
 
-	log.Println("Starting image update check...")
-	checkUpdates(appConfig, bot, sl)
+	bot, err := tgbotapi.NewBotAPI(appConfig.TelegramToken)
+	if err != nil {
+		log.Fatalf("Failed to create Telegram bot: %v", err)
+	}
 
-	log.Println("Image check completed. Waiting for termination signal...")
-	<-sigChan
-	log.Println("Shutting down...")
-}
+	go func() {
+		log.Println("Telegram listener started...")
+		u := tgbotapi.NewUpdate(0)
+		u.Timeout = 60
+		updates := bot.GetUpdatesChan(u)
 
-// logrus.Infof("Controlla started. Checking every %d minutes.", cfg.Checker.IntervalMinutes)
+		for update := range updates {
+			if update.CallbackQuery != nil {
+				handleCallbackQuery(bot, update.CallbackQuery, appConfig, sl)
+			}
+		}
+		log.Println("Telegram listener is shutting down.")
+	}()
 
-// 2. Create clients
-// ghcrClient := registry.NewGhcrClient(appConfig.GithubToken)
+	ticker := time.NewTicker(time.Duration(appConfig.Checker.IntervalMinutes) * time.Minute)
+	defer ticker.Stop()
 
-// if appConfig.GithubToken != "" {
-// 	ghcrImage := "authelia/authelia" // your ghcr image
-// 	tags, err := ghcrClient.GetTags(ghcrImage)
-// 	if err != nil {
-// 		log.Printf("Error getting GHCR tags for %s: %v", ghcrImage, err)
-// 	} else {
-// 		log.Printf("GHCR tags for %s: %v", ghcrImage, tags)
-// 	}
-// }
-// for {
-// 	logrus.Info("Checking for updates...")
-// 	repoPath := "./repos/myrepo"
-// 	if err := gitrepo.CloneOrPull(cfg.Git.RepoURL, cfg.Git.Branch, repoPath, cfg.Git.SSHKeyPath); err != nil {
-// 		logrus.Fatalf("Failed to sync repo: %v", err)
-// 	}
-// 	logrus.Info("Repo synced")
-
-// 	repoServices := "./repos/myrepo/services"
-// 	images, err := checker.FindImagesInCompose(repoServices)
-// 	if err != nil {
-// 		logrus.Fatalf("failed to scan compose files: %v", err)
-// 	}
-
-// 	logrus.Infof("Found %d images:", len(images))
-// 	for _, img := range images {
-// 		parsed := checker.ParseImageName(img.Name)
-
-// 		digest, err := checker.GetImageDigest(parsed, cfg)
-// 		if err != nil {
-// 			logrus.Warnf("Failed to get digest for %s: %v", parsed.Full, err)
-// 			continue
-// 		}
-
-// 		logrus.Infof("[%s/%s] digest for %s: %s", img.Host, img.Service, parsed.Full, digest)
-// 	}
-
-// 	time.Sleep(time.Duration(cfg.Checker.IntervalMinutes) * time.Minute)
-// }
-
-// startTelegramListener запускает слушателя для Telegram API.
-func startTelegramListener(ctx context.Context, bot *tgbotapi.BotAPI, appConfig *config.AppConfig, skipList *skiplist.SkipList) {
-	updateConfig := tgbotapi.NewUpdate(0)
-	updateConfig.Timeout = 60
-
-	updates := bot.GetUpdatesChan(updateConfig)
-
-	log.Println("Telegram listener started...")
+	// 🚨 ИСПРАВЛЕНИЕ: Передаем 'bot' и 'sl' в функцию runCheck
+	runCheck(ctx, appConfig, bot, sl)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Telegram listener is shutting down.")
 			return
-		case update := <-updates:
-			// Передаем skipList дальше
-			if update.CallbackQuery != nil {
-				handleCallbackQuery(bot, update.CallbackQuery, appConfig, skipList)
-			}
+		case <-ticker.C:
+			// 🚨 ИСПРАВЛЕНИЕ: Передаем 'bot' и 'sl' в функцию runCheck
+			runCheck(ctx, appConfig, bot, sl)
 		}
 	}
 }
 
-// handleCallbackQuery обрабатывает нажатие на inline-кнопку.
-func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig, skipList *skiplist.SkipList) {
+// 🚨 ИСПРАВЛЕНИЕ: Добавляем 'bot' и 'sl' как параметры функции.
+func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.BotAPI, sl *skiplist.SkipList) {
+	log.Println("Starting image update check...")
+
+	repoPath := appConfig.Git.LocalRepoPath
+
+	// 🚨 ИСПРАВЛЕНИЕ: Отладочные выводы для проверки пути к ключу
+	log.Printf("Attempting to use SSH key path: %s", appConfig.Git.SSHKeyPath)
+	if _, err := os.Stat(appConfig.Git.SSHKeyPath); os.IsNotExist(err) {
+		log.Printf("🚨 The SSH key file does not exist at path: %s", appConfig.Git.SSHKeyPath)
+		// 🚨 ИСПРАВЛЕНИЕ: Преобразуем chatID в int64.
+		chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
+		notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("❌ Error: SSH key file not found at path: %s", appConfig.Git.SSHKeyPath))
+		return
+	}
+
+	// 🚨 ИСПРАВЛЕНИЕ: Исправлен вызов CloneOrPull. Эта функция возвращает только 1 значение (error).
+	err := gitrepo.CloneOrPull(appConfig.Git.RepoURL, appConfig.Git.Branch, repoPath, appConfig.Git.SSHKeyPath)
+	if err != nil {
+		log.Printf("Error cloning or pulling repository: %v", err)
+		// 🚨 ИСПРАВЛЕНИЕ: Преобразуем chatID в int64.
+		chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
+		notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("❌ Error cloning/pulling repository: %v", err))
+		return
+	}
+	log.Println("Repository cloned or pulled successfully.")
+
+	// Получаем все .yml и .yaml файлы
+	relevantFiles, err := checker.FindRelevantFiles(repoPath)
+	if err != nil {
+		log.Printf("Error finding relevant files: %v", err)
+		return
+	}
+	log.Printf("Found %d relevant files.", len(relevantFiles))
+
+	// Парсим образы из найденных файлов
+	services, err := checker.ParseRelevantFiles(relevantFiles)
+	if err != nil {
+		log.Printf("Error parsing images: %v", err)
+		return
+	}
+	log.Printf("Found a total of %d services.", len(services))
+
+	// Группируем сервисы по образу
+	groupedServices := make(map[string][]checker.ServiceInfo)
+	for _, service := range services {
+		fullImageName := registry.GetFullImageName(&service.ImageInfo)
+		groupedServices[fullImageName] = append(groupedServices[fullImageName], service)
+	}
+	log.Printf("Found a total of %d unique images", len(groupedServices))
+
+	// Проверяем обновления для каждого уникального образа
+	for fullImageName, services := range groupedServices {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			log.Printf("Parsing image: Registry=%s, Image=%s, Tag=%s", services[0].ImageInfo.Registry, services[0].ImageInfo.Image, services[0].ImageInfo.Tag)
+
+			// 🚨 ИСПРАВЛЕНИЕ: Проверяем, не пропущено ли это обновление.
+			if sl.IsSkipped(fullImageName, services[0].ImageInfo.Tag) {
+				log.Printf("Skipping update for %s. It's in the skip list.", fullImageName)
+				continue
+			}
+
+			// 🚨 ИСПРАВЛЕНИЕ: Заново добавляем логику для выбора правильного клиента реестра
+			// и получения тегов. Это было утеряно в предыдущем ответе.
+			var tags []string
+			var err error
+
+			switch services[0].ImageInfo.Registry {
+			case "docker.io":
+				client := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
+				tags, err = client.GetTags(services[0].ImageInfo.Image)
+			case "ghcr.io":
+				client := registry.NewGhcrClient(appConfig.GithubToken)
+				tags, err = client.GetTags(services[0].ImageInfo.Image)
+			// Если нужны другие реестры, можно добавить их здесь
+			default:
+				log.Printf("Skipping unsupported registry: %s", services[0].ImageInfo.Registry)
+				continue
+			}
+
+			if err != nil {
+				log.Printf("Error getting tags for %s: %v", fullImageName, err)
+				continue
+			}
+
+			// Фильтруем теги по SemVer и получаем N последних
+			latestTags := versionutils.GetLatestTags(tags, appConfig.Checker.ProposedTagsCount)
+			if len(latestTags) == 0 {
+				log.Printf("⚠️ Can't check updates for %s. No SemVer tags found.", fullImageName)
+				continue
+			}
+
+			// Сравниваем версии
+			latestAvailable := latestTags[0]
+			currentVersion, err := semver.NewVersion(services[0].ImageInfo.Tag)
+			if err != nil {
+				log.Printf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, services[0].ImageInfo.Tag)
+				continue
+			}
+			latestVersion, _ := semver.NewVersion(latestAvailable) // Ошибку игнорируем, т.к. тег уже отфильтрован
+
+			if latestVersion.GreaterThan(currentVersion) {
+				if sl.IsSkipped(fullImageName, latestAvailable) {
+					log.Printf("⏩ Update for %s (tag %s) is in the skip list. Skipping notification.", fullImageName, latestAvailable)
+					continue // Пропускаем отправку уведомления и переходим к следующему сервису
+				}
+				log.Printf("🚨 New update for %s. Current tag: %s, Available: %s", fullImageName, services[0].ImageInfo.Tag, latestAvailable)
+				// Генерируем уникальный ID для кеша
+				id := fmt.Sprintf("%x", time.Now().UnixNano())
+
+				// Сохраняем информацию об обновлении в кеш
+				cacheMutex.Lock()
+				updateCache[id] = UpdateInfo{
+					RepoPath: appConfig.Git.LocalRepoPath,
+					Services: services,
+					NewTag:   latestAvailable,
+				}
+				cacheMutex.Unlock()
+
+				message := fmt.Sprintf("🚨 New update for **%s**\\nCurrent version: `%s`\\nAvaliable version: `%s`", fullImageName, services[0].ImageInfo.Tag, latestAvailable)
+				// 🚨 ИСПРАВЛЕНИЕ: Передаем 'bot' и преобразуем chatID в string, как требует notifier.SendInteractiveMessage.
+				notifier.SendInteractiveMessage(bot, appConfig.TelegramChatID, message, latestTags, id)
+			} else {
+				log.Printf("✅ %s is actual. Current tag: %s", fullImageName, services[0].ImageInfo.Tag)
+			}
+		}
+	}
+	log.Println("Image check completed. Waiting for termination signal...")
+}
+
+// 🚨 ИСПРАВЛЕНИЕ: Добавляем 'bot' и 'sl' как параметры функции.
+func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig, sl *skiplist.SkipList) {
 	callbackData := callback.Data
 
 	if strings.HasPrefix(callbackData, "update_to:") {
@@ -192,7 +276,7 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 		msg.ReplyToMessageID = callback.Message.MessageID
 		bot.Send(msg)
 
-		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Перебираем все сервисы, которые используют этот образ
+		// 🚨 ИСПРАВЛЕНИЕ: Перебираем все сервисы, которые используют этот образ
 		for _, service := range info.Services {
 			log.Printf("Updating service %s in file %s to tag %s", service.ServiceName, service.FilePath, newTag)
 
@@ -207,26 +291,24 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 				notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
 			}
 		}
-	} else if strings.HasPrefix(callbackData, "ignore:") {
+	} else if strings.HasPrefix(callbackData, "ignore") {
 		id := strings.TrimPrefix(callbackData, "ignore:")
-
-		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Обращаемся к кешу, чтобы получить полную информацию об образе
+		// Получаем информацию из кеша
 		cacheMutex.Lock()
 		info, ok := updateCache[id]
 		cacheMutex.Unlock()
-
 		if ok {
+			// 🚨 ИСПРАВЛЕНИЕ: Используем skipList для вызова метода Add
 			fullImageName := registry.GetFullImageName(&info.Services[0].ImageInfo)
-			err := skipList.Add(fullImageName, info.NewTag)
+			err := sl.Add(fullImageName, info.NewTag)
 			if err != nil {
 				log.Printf("Error adding update to skip list: %v", err)
-			} else {
-				log.Printf("Successfully added %s to skip list.", fullImageName)
 			}
 		} else {
-			// Если информация в кеше не найдена, логируем ошибку
 			log.Printf("Error: Update info for ID %s not found in cache. The program may have been restarted.", id)
 		}
+		// 🚨 ИСПРАВЛЕНИЕ: Логика для кнопки "Skip"
+		log.Printf("Received skip request for update ID: %s", strings.TrimPrefix(callbackData, "ignore:"))
 
 		// Отправляем пользователю подтверждение и удаляем исходное сообщение
 		deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
@@ -235,102 +317,9 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 			log.Printf("Error deleting message: %v", err)
 		}
 
+		// Дополнительно можно отправить сообщение, что обновление пропущено
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "✅ Update skipped.")
 		msg.ReplyToMessageID = callback.Message.MessageID
 		bot.Send(msg)
-	}
-}
-
-func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI, skipList *skiplist.SkipList) {
-	// 1. Клонируем или обновляем репозиторий
-	log.Printf("Cloning repository %s to %s", appConfig.Git.RepoURL, appConfig.Git.LocalRepoPath)
-	err := gitrepo.CloneOrPull(appConfig.Git.RepoURL, appConfig.Git.Branch, appConfig.Git.LocalRepoPath, appConfig.Git.SSHKeyPath)
-	if err != nil {
-		log.Printf("Failed to clone or pull repository: %v", err)
-		return
-	}
-	log.Println("Repository cloned or pulled successfully.")
-
-	// 2. Находим релевантные файлы
-	filePaths, err := checker.FindRelevantFiles(appConfig.Git.LocalRepoPath)
-	if err != nil {
-		log.Printf("Error finding files: %v", err)
-		return
-	}
-	log.Printf("Found %d relevant files.", len(filePaths))
-
-	// 3. Парсим файлы и получаем полный список сервисов
-	allServices, err := checker.ParseRelevantFiles(filePaths)
-	if err != nil {
-		log.Printf("Error parsing files: %v", err)
-		return
-	}
-	log.Printf("Found a total of %d services.", len(allServices))
-
-	// 4. Группируем сервисы по образу
-	servicesByImage := make(map[string][]checker.ServiceInfo)
-	for _, service := range allServices {
-		fullImageName := fmt.Sprintf("%s/%s", service.ImageInfo.Registry, service.ImageInfo.Image)
-		servicesByImage[fullImageName] = append(servicesByImage[fullImageName], service)
-	}
-	log.Printf("Found a total of %d unique images", len(servicesByImage))
-
-	// 5. Проверяем обновления для каждого уникального образа
-	dockerhubClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
-	for fullImageName, services := range servicesByImage {
-		serviceInfo := services[0] // Берем первый сервис из группы для проверки
-
-		log.Printf("Parsing image: Registry=%s, Image=%s, Tag=%s", serviceInfo.ImageInfo.Registry, serviceInfo.ImageInfo.Image, serviceInfo.ImageInfo.Tag)
-
-		// Мы проверяем только образы из docker.io
-		if serviceInfo.ImageInfo.Registry != "docker.io" {
-			log.Printf("Skipping registry %s for image %s", serviceInfo.ImageInfo.Registry, fullImageName)
-			continue
-		}
-
-		// Получаем список тегов из Docker Hub
-		tags, err := dockerhubClient.GetTags(serviceInfo.ImageInfo.Image)
-		if err != nil {
-			log.Printf("Error getting tags for %s: %v", serviceInfo.ImageInfo.Image, err)
-			continue
-		}
-
-		// Фильтруем теги по SemVer
-		latestTags := versionutils.GetLatestTags(tags, appConfig.Checker.ProposedTagsCount)
-		if len(latestTags) == 0 {
-			log.Printf("⚠️ Can't check updates for %s. No SemVer tags found.", fullImageName)
-			continue
-		}
-
-		// Сравниваем версии
-		latestAvailable := latestTags[0]
-		currentVersion, err := semver.NewVersion(serviceInfo.ImageInfo.Tag)
-		if err != nil {
-			log.Printf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, serviceInfo.ImageInfo.Tag)
-			continue
-		}
-		latestVersion, _ := semver.NewVersion(latestAvailable) // Ошибку игнорируем, т.к. тег уже отфильтрован
-
-		if latestVersion.GreaterThan(currentVersion) {
-			log.Printf("🚨 New update for %s. Current tag: %s, Available: %s", fullImageName, serviceInfo.ImageInfo.Tag, latestAvailable)
-
-			// Генерируем уникальный ID для кеша
-			id := fmt.Sprintf("%x", time.Now().UnixNano())
-
-			// Сохраняем информацию об обновлении в кеш
-			cacheMutex.Lock()
-			updateCache[id] = UpdateInfo{
-				RepoPath: appConfig.Git.LocalRepoPath,
-				Services: services,
-				NewTag:   latestAvailable,
-			}
-			cacheMutex.Unlock()
-
-			message := fmt.Sprintf("🚨 New update for %s\nCurrent version: `%s`\nAvaliable version: `%s`", fullImageName, serviceInfo.ImageInfo.Tag, latestAvailable)
-			// Отправляем сообщение, передавая ID
-			notifier.SendInteractiveMessage(bot, appConfig.TelegramChatID, message, latestTags, id)
-		} else {
-			log.Printf("✅ %s is actual. Current tag: %s", fullImageName, serviceInfo.ImageInfo.Tag)
-		}
 	}
 }
