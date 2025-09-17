@@ -92,18 +92,18 @@ func main() {
 		log.Println("Telegram listener is shutting down.")
 	}()
 
-	ticker := time.NewTicker(time.Duration(appConfig.Checker.IntervalMinutes) * time.Minute)
+	checkInterval := time.Duration(appConfig.Checker.IntervalMinutes) * time.Minute
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
-	// 🚨 ИСПРАВЛЕНИЕ: Передаем 'bot' и 'sl' в функцию runCheck
 	runCheck(ctx, appConfig, bot, sl)
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Println("Shutting down...")
 			return
 		case <-ticker.C:
-			// 🚨 ИСПРАВЛЕНИЕ: Передаем 'bot' и 'sl' в функцию runCheck
 			runCheck(ctx, appConfig, bot, sl)
 		}
 	}
@@ -239,7 +239,7 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			}
 		}
 	}
-	log.Println("Image check completed. Waiting for termination signal...")
+	log.Println("Image check completed.")
 }
 
 // 🚨 ИСПРАВЛЕНИЕ: Добавляем 'bot' и 'sl' как параметры функции.
