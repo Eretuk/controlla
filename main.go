@@ -7,6 +7,7 @@ import (
 	"controlla/internal/gitrepo"
 	"controlla/internal/notifier"
 	"controlla/internal/registry"
+	"controlla/internal/skiplist"
 	"controlla/internal/updater"
 	"controlla/internal/versionutils"
 	"fmt"
@@ -44,6 +45,20 @@ func main() {
 	}
 	log.Println("Configuration loaded successfully.")
 
+	if _, err := os.Stat(appConfig.Git.LocalRepoPath); err == nil {
+		log.Println("Removing old repository clone...")
+		err := os.RemoveAll(appConfig.Git.LocalRepoPath)
+		if err != nil {
+			log.Printf("Failed to remove old repository: %v", err)
+		}
+	}
+
+	// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Загружаем список пропущенных обновлений
+	skipList := skiplist.NewSkipList(appConfig.Checker.SkipListFile)
+	if err := skipList.Load(); err != nil {
+		log.Fatalf("Error loading skip list: %v", err)
+	}
+
 	bot, err := tgbotapi.NewBotAPI(appConfig.TelegramToken)
 	if err != nil {
 		log.Fatalf("Error creating Telegram bot API client: %v", err)
@@ -58,7 +73,7 @@ func main() {
 	go startTelegramListener(ctx, bot, appConfig)
 
 	log.Println("Starting image update check...")
-	checkUpdates(appConfig, bot)
+	checkUpdates(appConfig, bot, skipList)
 
 	log.Println("Image check completed. Waiting for termination signal...")
 	<-sigChan
@@ -137,6 +152,11 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 	callbackData := callback.Data
 
 	if strings.HasPrefix(callbackData, "update_to:") {
+		deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
+		_, err := bot.Request(deleteConfig)
+		if err != nil {
+			log.Printf("Error deleting message: %v", err)
+		}
 		// Парсим ID и NewTag из callbackData
 		parts := strings.Split(callbackData, ":")
 		if len(parts) != 3 {
@@ -176,22 +196,41 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 				notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
 			}
 		}
+	} else if strings.HasPrefix(callbackData, "skip_update:") {
+		id := strings.TrimPrefix(callbackData, "skip_update:")
+		// Получаем информацию из кеша
+		cacheMutex.Lock()
+		info, ok := updateCache[id]
+		cacheMutex.Unlock()
+		if ok {
+			// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Добавляем обновление в список пропусков
+			fullImageName := registry.GetFullImageName(&info.Services[0].ImageInfo)
+			err := skiplist.Add(fullImageName, info.NewTag)
+			if err != nil {
+				log.Printf("Error adding update to skip list: %v", err)
+			}
+		}
+		// 🚨 ИСХОДНОЕ ИСПРАВЛЕНИЕ: Логика для кнопки "Skip"
+		log.Printf("Received skip request for update ID: %s", strings.TrimPrefix(callbackData, "skip_update:"))
 
+		// Отправляем пользователю подтверждение и удаляем исходное сообщение
+		deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
+		_, err := bot.Request(deleteConfig)
+		if err != nil {
+			log.Printf("Error deleting message: %v", err)
+		}
+
+		// Дополнительно можно отправить сообщение, что обновление пропущено
+		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "✅ Update skipped.")
+		msg.ReplyToMessageID = callback.Message.MessageID
+		bot.Send(msg)
 	}
 }
 
-func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI) {
+func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI, skipList *skiplist.SkipList) {
 	// 1. Клонируем или обновляем репозиторий
-	repoPath := appConfig.Git.LocalRepoPath
-	if _, err := os.Stat(appConfig.Git.LocalRepoPath); err == nil {
-		log.Println("Removing old repository clone...")
-		err := os.RemoveAll(appConfig.Git.LocalRepoPath)
-		if err != nil {
-			log.Printf("Failed to remove old repository: %v", err)
-		}
-	}
-	log.Printf("Cloning repository %s to %s", appConfig.Git.RepoURL, repoPath)
-	err := gitrepo.CloneOrPull(appConfig.Git.RepoURL, appConfig.Git.Branch, repoPath, appConfig.Git.SSHKeyPath)
+	log.Printf("Cloning repository %s to %s", appConfig.Git.RepoURL, appConfig.Git.LocalRepoPath)
+	err := gitrepo.CloneOrPull(appConfig.Git.RepoURL, appConfig.Git.Branch, appConfig.Git.LocalRepoPath, appConfig.Git.SSHKeyPath)
 	if err != nil {
 		log.Printf("Failed to clone or pull repository: %v", err)
 		return
@@ -199,7 +238,7 @@ func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI) {
 	log.Println("Repository cloned or pulled successfully.")
 
 	// 2. Находим релевантные файлы
-	filePaths, err := checker.FindRelevantFiles(repoPath)
+	filePaths, err := checker.FindRelevantFiles(appConfig.Git.LocalRepoPath)
 	if err != nil {
 		log.Printf("Error finding files: %v", err)
 		return
@@ -267,7 +306,7 @@ func checkUpdates(appConfig *config.AppConfig, bot *tgbotapi.BotAPI) {
 			// Сохраняем информацию об обновлении в кеш
 			cacheMutex.Lock()
 			updateCache[id] = UpdateInfo{
-				RepoPath: repoPath,
+				RepoPath: appConfig.Git.LocalRepoPath,
 				Services: services,
 				NewTag:   latestAvailable,
 			}

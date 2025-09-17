@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"fmt"
 	"log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -24,22 +25,20 @@ func SendInteractiveMessage(bot *tgbotapi.BotAPI, chatID string, message string,
 	msg := tgbotapi.NewMessageToChannel(chatID, message)
 	msg.ParseMode = tgbotapi.ModeMarkdown // Включаем Markdown для форматирования
 
-	var buttons []tgbotapi.InlineKeyboardButton
-	for _, tag := range latestTags {
-		button := tgbotapi.NewInlineKeyboardButtonData(tag, "update_to:"+id+":"+tag)
-		buttons = append(buttons, button)
+	if len(latestTags) > 0 {
+		// Кнопка для обновления (только на самый последний тег)
+		updateButton := tgbotapi.NewInlineKeyboardButtonData(fmt.Sprintf("Update to %s", latestTags[0]), "update_to:"+id+":"+latestTags[0])
+
+		// Кнопка для пропуска
+		skipButton := tgbotapi.NewInlineKeyboardButtonData("Skip this update", "skip_update:"+id)
+
+		// Создаем клавиатуру с кнопками
+		keyboard := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(updateButton),
+			tgbotapi.NewInlineKeyboardRow(skipButton),
+		)
+		msg.ReplyMarkup = keyboard
 	}
-
-	// Создаём клавиатуру с кнопками
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(buttons...),
-		// Можно добавить другие кнопки, например, "игнорировать"
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Ignore this update", "ignore"),
-		),
-	)
-
-	msg.ReplyMarkup = keyboard
 
 	_, err := bot.Send(msg)
 	if err != nil {
