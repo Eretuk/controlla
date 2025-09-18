@@ -17,4 +17,4 @@ COPY data/config.yaml /app/data/config.yaml
 # Install bash for potential scripting needs
 RUN apk add --no-cache bash
 
-CMD ["./controlla --config-file /app/data/config.yaml"]
+CMD ["./controlla", "--config-file", "/app/data/config.yaml"]
