@@ -6,17 +6,31 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
 func CloneOrPull(repoURL, branch, dstPath, sshKeyPath string) error {
-	var auth transport.AuthMethod
+	var auth *gitssh.PublicKeys
 
-	publicKeys, err := ssh.NewPublicKeysFromFile("git", sshKeyPath, "")
+	publicKeys, err := gitssh.NewPublicKeysFromFile("git", sshKeyPath, "")
 	if err != nil {
 		return fmt.Errorf("failed to read SSH key: %w", err)
 	}
+
+	// --- ADD THIS BLOCK ---
+	knownHostsPath := os.Getenv("SSH_KNOWN_HOSTS")
+	if knownHostsPath == "" {
+		knownHostsPath = "/app/data/known_hosts"
+	}
+	hostKeyCallback, err := gitssh.NewKnownHostsCallback(knownHostsPath)
+	if err != nil {
+		return fmt.Errorf("cannot create known hosts callback: %w", err)
+	}
+	publicKeys.HostKeyCallbackHelper = gitssh.HostKeyCallbackHelper{
+		HostKeyCallback: hostKeyCallback,
+	}
+	// --- END BLOCK ---
+
 	auth = publicKeys
 
 	if _, err := os.Stat(dstPath); os.IsNotExist(err) {
