@@ -14,8 +14,8 @@ WORKDIR /app
 COPY --from=builder /app/controlla /app/
 COPY data/config.yaml /app/data/config.yaml
 
-# Install bash for potential scripting needs
-RUN apk add --no-cache bash
+# Install bash and ssh-client for potential scripting needs
+RUN apk add --no-cache bash openssh-client
 
 ENV SSH_KNOWN_HOSTS=/app/data/known_hosts
 ENV SSH_KEY_PATH=/app/data/id_rsa
