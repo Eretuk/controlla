@@ -1,0 +1,6 @@
+.git
+repos/
+*.md
+*.log
+*.sh
+*.j2
