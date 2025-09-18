@@ -13,6 +13,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -153,12 +154,15 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 // Main entry point for the controlla application.
 // This service checks container images for updates and notifies via Telegram.
 func main() {
+	// Parse command-line flags
+	configPath := flag.String("config-file", "./data/config.yaml", "Path to config file")
+	flag.Parse()
 	// Set up logging format and level
 	logrus.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 	logrus.SetLevel(logrus.InfoLevel)
 
 	// Load application configuration from YAML file
-	appConfig, err := config.LoadConfig("config.yaml")
+	appConfig, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Error loading application configuration: %v", err)
 	}

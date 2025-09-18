@@ -12,9 +12,9 @@ WORKDIR /app
 
 # Copy the binary and config file from the builder stage
 COPY --from=builder /app/controlla /app/
-COPY config.yaml /app/
+COPY data/config.yaml /app/data/config.yaml
 
 # Install bash for potential scripting needs
 RUN apk add --no-cache bash
 
-CMD ["./controlla"]
+CMD ["./controlla --config-file /app/data/config.yaml"]
