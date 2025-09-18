@@ -1,8 +1,8 @@
 git:
-  repo_url: "git@git.kolspace.cc:victor.kolomin/test-homelab.git"
+  repo_url: "git@example.git"
   local_repo_path: ./repos/myrepo
   branch: "main"
-  ssh_key_path: "/Users/victorkolomin/git/controlla/id_rsa"
+  ssh_key_path: "id_rsa"
 
 checker:
   watch_folder: services

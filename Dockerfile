@@ -10,13 +10,11 @@ RUN go build -o controlla .
 FROM public.ecr.aws/docker/library/alpine:3.22.1
 WORKDIR /app
 
-# Копируем бинарник и всё нужное (например, config.yaml, skipped.yaml)
+# Copy the binary and config file from the builder stage
 COPY --from=builder /app/controlla /app/
-COPY config.yaml skipped.yaml /app/
+COPY config.yaml /app/
 
-# Если нужны ssh-ключи или другие файлы — добавь COPY
-
-# Установи bash, если нужен (например, для скриптов)
+# Install bash for potential scripting needs
 RUN apk add --no-cache bash
 
 CMD ["./controlla"]
