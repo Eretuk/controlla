@@ -68,8 +68,8 @@ ignored_images:
 ```sh
 docker build -t controlla .
 docker run --rm \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  -v $(pwd)/skipped.yaml:/app/skipped.yaml \
+  -v $(pwd)/config.yaml:/app/data/config.yaml \
+  -v $(pwd)/skipped.yaml:/app/data/skipped.yaml \
   -v ~/.ssh/id_rsa:/app/id_rsa:ro \
   -e TELEGRAM_TOKEN=your_telegram_token \
   -e TELEGRAM_CHAT_ID=your_chat_id \
@@ -126,6 +126,7 @@ trigger:
 - `CONTROLLA__TELEGRAM__CHAT__ID` — Chat ID for notifications
 - `CONTROLLA__DOCKERHUB__USERNAME` — username for private DockerHub access (if needed)
 - `CONTROLLA__DOCKERHUB__PASSWORD` — token for private DockerHub access (if needed)
+- `SSH_KNOWN_HOSTS` - path in container for known_host file (Default: /app/data/known_hosts)
 
 ---
 
