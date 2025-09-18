@@ -1,7 +1,6 @@
 package versionutils
 
 import (
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,37 +8,44 @@ import (
 	"github.com/Masterminds/semver"
 )
 
+// SortAndFilterTags удаляет дубликаты, фильтрует теги по SemVer,
+// сортирует их и возвращает N последних тегов.
 func SortAndFilterTags(tags []string, n int) []string {
-	// Filter and parsing tags
-	var versions []*semver.Version
-	re := regexp.MustCompile(`^(\d+\.\d+\.\d+.*)`)
-
+	// 1. Используем map для хранения уникальных тегов
+	uniqueVersions := make(map[string]*semver.Version)
 	for _, tag := range tags {
-		// More flexible logic for type "1.29.1-alpine"
-		if re.MatchString(tag) {
-			v, err := semver.NewVersion(strings.Split(tag, "-")[0])
-			if err == nil {
-				versions = append(versions, v)
-			}
+		// Убираем префикс "v" и другие возможные
+		cleanTag := strings.TrimPrefix(tag, "v")
+
+		// Пытаемся распарсить как SemVer.
+		// Это автоматически отфильтрует все некорректные теги.
+		v, err := semver.NewVersion(cleanTag)
+		if err == nil {
+			uniqueVersions[v.String()] = v
 		}
 	}
 
-	// Sort in descend mode
-	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].GreaterThan(versions[j])
-	})
-
-	// Return N tags
-	if n > len(versions) {
-		n = len(versions)
+	// 2. Преобразуем map в срез для сортировки
+	var semverTags []*semver.Version
+	for _, v := range uniqueVersions {
+		semverTags = append(semverTags, v)
 	}
 
-	latestTags := make([]string, n)
-	for i := 0; i < n; i++ {
-		latestTags[i] = versions[i].Original()
+	// 3. Сортируем версии в порядке убывания (от новейших к старейшим)
+	sort.Sort(sort.Reverse(semver.Collection(semverTags)))
+
+	// 4. Фильтруем теги до нужного количества
+	if len(semverTags) > n {
+		semverTags = semverTags[:n]
 	}
 
-	return latestTags
+	// 5. Преобразуем обратно в строки
+	var result []string
+	for _, v := range semverTags {
+		result = append(result, v.String())
+	}
+
+	return result
 }
 
 // RemoveDuplicatesAndSort removes duplicate tags and sorts them semantically.

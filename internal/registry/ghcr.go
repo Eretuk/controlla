@@ -3,28 +3,57 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
 type GhcrClient struct {
 	Client *http.Client
-	Token  string
 }
 
-func NewGhcrClient(token string) *GhcrClient {
+func NewGhcrClient() *GhcrClient {
 	return &GhcrClient{
 		Client: &http.Client{},
-		Token:  token,
 	}
 }
 
 // GetTags retrieves all image tags for a given image.
 func (c *GhcrClient) GetTags(image string) ([]string, error) {
-	url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list", image)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	// Step 1: Request an anonymous token
+	authURL := fmt.Sprintf("https://ghcr.io/token?service=ghcr.io&scope=repository:%s:pull", image)
+	req, err := http.NewRequest(http.MethodGet, authURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create auth request: %w", err)
+	}
 
 	resp, err := c.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get GHCR token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GHCR token request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var authData struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&authData); err != nil {
+		return nil, fmt.Errorf("failed to decode auth response: %w", err)
+	}
+	token := authData.Token
+
+	// Step 2: Use the token to get the tags list
+	url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list", image)
+	req, err = http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tags request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err = c.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get GHCR tags: %w", err)
 	}
