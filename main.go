@@ -343,7 +343,8 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			// Filter and sort tags according to SemVer and propose N latest
 			latestTags := versionutils.SortAndFilterTags(tags, appConfig.Checker.ProposedTagsCount, appConfig.Checker.IgnoreKeywords)
 			if len(latestTags) == 0 {
-				logrus.Warnf("Can't check updates for %s. No SemVer tags found. Available tags: %v", fullImageName, tags)
+				logrus.Warnf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template. Available tags: %v",
+					fullImageName, services[0].ImageInfo.Tag, tags)
 
 				currentDigest, err1 := getDigestForImage(
 					services[0].ImageInfo.Registry,
@@ -365,14 +366,12 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 
 				if err1 == nil && err2 == nil && currentDigest != "" && latestDigest != "" {
 					if currentDigest != latestDigest {
-						logrus.Warnf("Digest update for %s. Current tag: %s, 'latest' tag digest differs!", fullImageName, services[0].ImageInfo.Tag)
+						logrus.Warnf("🚨 Digest update for %s. Current tag: %s, 'latest' tag digest differs!", fullImageName, services[0].ImageInfo.Tag)
 					} else {
 						logrus.Infof("%s is actual by digest. Current tag: %s", fullImageName, services[0].ImageInfo.Tag)
 					}
 				} else {
 					logrus.Errorf("Can't check updates for %s. No SemVer tags and no digest fallback.", fullImageName)
-					chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
-					notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("Can't check updates for %s. No SemVer tags and no digest fallback.", fullImageName))
 				}
 				continue
 			}
@@ -381,7 +380,8 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			latestAvailable := latestTags[0]
 			currentVersion, err := semver.NewVersion(services[0].ImageInfo.Tag)
 			if err != nil {
-				logrus.Infof("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, services[0].ImageInfo.Tag)
+				logrus.Warnf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template. Available tags: %v",
+					fullImageName, services[0].ImageInfo.Tag, tags)
 				chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
 				notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, services[0].ImageInfo.Tag))
 				continue
