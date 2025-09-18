@@ -2,7 +2,6 @@ git:
   repo_url: "git@example.git"
   local_repo_path: ./data/repos/myrepo
   branch: "main"
-  ssh_key_path: "./data/id_rsa"
 
 checker:
   watch_folder: services

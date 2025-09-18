@@ -39,6 +39,7 @@ func LoadConfig(path string) (*AppConfig, error) {
 	viper.BindEnv("github_token", "CONTROLLA__GITHUB__TOKEN")
 	viper.BindEnv("telegram_token", "CONTROLLA__TELEGRAM__TOKEN")
 	viper.BindEnv("telegram_chat_id", "CONTROLLA__TELEGRAM__CHAT__ID")
+	viper.BindEnv("git.ssh_key_path", "SSH_KEY_PATH")
 
 	viper.SetConfigFile(path)
 	viper.SetConfigType("yaml")
