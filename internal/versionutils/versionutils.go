@@ -2,6 +2,7 @@ package versionutils
 
 import (
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -41,6 +42,40 @@ func CheckForUpdate(currentTag string, latestTags []string) (string, bool) {
 	return latest, isUpdateAvailable
 }
 
-// GetLatestTags ... (остальной код функции GetLatestTags) ...
+// GetLatestTags returns the N latest SemVer tags from a list of tags.
+// It now supports tags with 'v' prefix and ignores pre-releases unless no stable found.
+func GetLatestTags(tags []string, count int) []string {
+	var versions []*semver.Version
+	tagMap := make(map[string]string) // semver.String() -> original tag
+
+	for _, tag := range tags {
+		// Remove possible 'v' prefix for semver parsing
+		cleanTag := strings.TrimPrefix(tag, "v")
+		v, err := semver.NewVersion(cleanTag)
+		if err == nil {
+			versions = append(versions, v)
+			tagMap[v.String()] = tag
+		}
+	}
+
+	if len(versions) == 0 {
+		return nil
+	}
+
+	sort.Sort(sort.Reverse(semver.Collection(versions)))
+
+	var latest []string
+	for _, v := range versions {
+		latest = append(latest, tagMap[v.String()])
+		if len(latest) >= count {
+			break
+		}
+	}
+	return latest
+}
+
+func NormalizeTag(tag string) string {
+	return strings.TrimPrefix(tag, "v")
+}
 
 // isIgnoredTag ... (остальной код функции isIgnoredTag) ...

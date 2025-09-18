@@ -99,8 +99,6 @@ func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 	return tagsData.Tags, nil
 }
 
-// GetFullImageName создает полное имя образа из структуры DockerImageInfo.
-// Эта функция обрабатывает имена образов, как docker.io/library/ubuntu.
 func GetFullImageName(info *checker.DockerImageInfo) string {
 	// Специальный случай для официальных образов Docker Hub
 	if info.Registry == "docker.io" && strings.HasPrefix(info.Image, "library/") {

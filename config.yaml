@@ -9,3 +9,13 @@ checker:
   proposed_tags_count: 3
   interval_minutes: 15
   skip_list_file: "skipped.yaml"
+  ignore_keywords:
+    - rc
+    - beta
+    - alpha
+    - ubi
+    - test
+    - debug
+    - nightly
+    - arm64v8
+    - ubuntu

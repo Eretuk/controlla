@@ -10,6 +10,9 @@ import (
 	"controlla/internal/skiplist"
 	"controlla/internal/updater"
 	"controlla/internal/versionutils"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -35,6 +38,111 @@ type UpdateInfo struct {
 // updateCache stores information about found updates.
 var updateCache = make(map[string]UpdateInfo)
 var cacheMutex sync.Mutex
+
+// Для hash-режима нужен map hash → {fullImageName, tag}
+var callbackHashMap = make(map[string][2]string) // [fullImageName, tag]
+
+// Декодирует callback data обратно
+func decodeCallbackData(data, prefix string) (fullImageName, tag string, ok bool) {
+	if !strings.HasPrefix(data, prefix+":") {
+		return "", "", false
+	}
+	enc := strings.TrimPrefix(data, prefix+":")
+	if strings.HasPrefix(enc, "h:") && len(enc) == 42 { // "h:" + 40 hex
+		hash := strings.TrimPrefix(enc, "h:")
+		val, ok := callbackHashMap[hash]
+		if !ok {
+			return "", "", false
+		}
+		return val[0], val[1], true
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(enc)
+	if err != nil {
+		return "", "", false
+	}
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig, sl *skiplist.SkipList) {
+	callbackData := callback.Data
+
+	if strings.HasPrefix(callbackData, "update_to:") {
+		fullImageName, newTag, ok := decodeCallbackData(callbackData, "update_to")
+		if !ok {
+			log.Printf("Invalid update callback data format: %s", callbackData)
+			return
+		}
+
+		log.Printf("Received update request for image: %s, tag: %s", fullImageName, newTag)
+
+		// 🚨 Новый способ: ищем сервисы прямо сейчас в репозитории
+		repoPath := appConfig.Git.LocalRepoPath
+		relevantFiles, err := checker.FindRelevantFiles(repoPath)
+		if err != nil {
+			log.Printf("Error finding relevant files: %v", err)
+			notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error finding relevant files: %v", err))
+			return
+		}
+		services, err := checker.ParseRelevantFiles(relevantFiles)
+		if err != nil {
+			log.Printf("Error parsing images: %v", err)
+			notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error parsing images: %v", err))
+			return
+		}
+
+		var servicesToUpdate []checker.ServiceInfo
+		for _, service := range services {
+			if registry.GetFullImageName(&service.ImageInfo) == fullImageName {
+				servicesToUpdate = append(servicesToUpdate, service)
+			}
+		}
+
+		if len(servicesToUpdate) > 0 {
+			// Обновляем все найденные сервисы
+			for _, service := range servicesToUpdate {
+				// Проверяем, совпадает ли уже тег
+				if service.ImageInfo.Tag == newTag {
+					log.Printf("Service %s in file %s already has tag %s, skipping update.", service.ServiceName, service.FilePath, newTag)
+					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("ℹ️ Service %s already has version %s, no update needed.", service.ServiceName, newTag))
+					continue
+				}
+				err := updater.UpdateAndPushService(repoPath, service.FilePath, service.ServiceName, newTag, appConfig.Git.SSHKeyPath)
+				if err != nil {
+					log.Printf("Error updating service %s: %v", service.ServiceName, err)
+					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error updating service %s: %v", service.ServiceName, err))
+				} else {
+					log.Println("Update successful!")
+					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
+				}
+			}
+		}
+	} else if strings.HasPrefix(callbackData, "ignore:") {
+		fullImageName, tagToIgnore, ok := decodeCallbackData(callbackData, "ignore")
+		if !ok {
+			log.Printf("Invalid ignore callback data format: %s", callbackData)
+			return
+		}
+
+		log.Printf("Received ignore request for image: %s, version: %s", fullImageName, tagToIgnore)
+
+		err := sl.Add(fullImageName, tagToIgnore)
+		if err != nil {
+			log.Printf("Error adding update to skip list: %v", err)
+		} else {
+			log.Printf("Update for %s with tag %s has been added to the skip list.", fullImageName, tagToIgnore)
+		}
+	}
+	// Отправляем пользователю подтверждение и удаляем исходное сообщение
+	deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
+	_, err := bot.Request(deleteConfig)
+	if err != nil {
+		log.Printf("Error deleting message: %v", err)
+	}
+}
 
 // Main entry point for the controlla application.
 // This service checks container images for updates and notifies via Telegram.
@@ -205,9 +313,9 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			}
 
 			// Фильтруем теги по SemVer и получаем N последних
-			latestTags := versionutils.GetLatestTags(tags, appConfig.Checker.ProposedTagsCount)
+			latestTags := versionutils.SortAndFilterTags(tags, appConfig.Checker.ProposedTagsCount, appConfig.Checker.IgnoreKeywords)
 			if len(latestTags) == 0 {
-				log.Printf("⚠️ Can't check updates for %s. No SemVer tags found.", fullImageName)
+				log.Printf("⚠️ Can't check updates for %s. No SemVer tags found. Available tags: %v", fullImageName, tags)
 				continue
 			}
 
@@ -252,7 +360,14 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 						services[0].ImageInfo.Tag,
 						tag,
 					)
-					notifier.SendInteractiveMessage(bot, appConfig.TelegramChatID, message, []string{tag}, fullImageName)
+					// Перед отправкой кнопки:
+					callbackData := encodeCallbackData("update_to", fullImageName, tag)
+					// Если fallback на hash — сохраняем в map
+					if strings.Contains(callbackData, ":h:") {
+						hash := strings.Split(callbackData, ":h:")[1]
+						callbackHashMap[hash] = [2]string{fullImageName, tag}
+					}
+					notifier.SendInteractiveMessage(bot, appConfig.TelegramChatID, message, []string{tag}, callbackData)
 				}
 			} else {
 				log.Printf("✅ %s is actual. Current tag: %s", fullImageName, services[0].ImageInfo.Tag)
@@ -262,85 +377,15 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 	log.Println("Image check completed.")
 }
 
-func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery, appConfig *config.AppConfig, sl *skiplist.SkipList) {
-	callbackData := callback.Data
-
-	if strings.HasPrefix(callbackData, "update_to:") {
-		// Парсим callback data, чтобы получить имя образа и новый тег
-		parts := strings.Split(callbackData, ":")
-		if len(parts) != 3 {
-			log.Printf("Invalid update callback data format: %s", callbackData)
-			return
-		}
-		fullImageName := parts[1]
-		newTag := parts[2]
-
-		log.Printf("Received update request for image: %s, tag: %s", fullImageName, newTag)
-
-		// 🚨 Новый способ: ищем сервисы прямо сейчас в репозитории
-		repoPath := appConfig.Git.LocalRepoPath
-		relevantFiles, err := checker.FindRelevantFiles(repoPath)
-		if err != nil {
-			log.Printf("Error finding relevant files: %v", err)
-			notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error finding relevant files: %v", err))
-			return
-		}
-		services, err := checker.ParseRelevantFiles(relevantFiles)
-		if err != nil {
-			log.Printf("Error parsing images: %v", err)
-			notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error parsing images: %v", err))
-			return
-		}
-
-		var servicesToUpdate []checker.ServiceInfo
-		for _, service := range services {
-			if registry.GetFullImageName(&service.ImageInfo) == fullImageName {
-				servicesToUpdate = append(servicesToUpdate, service)
-			}
-		}
-
-		if len(servicesToUpdate) > 0 {
-			// Обновляем все найденные сервисы
-			for _, service := range servicesToUpdate {
-				// Проверяем, совпадает ли уже тег
-				if service.ImageInfo.Tag == newTag {
-					log.Printf("Service %s in file %s already has tag %s, skipping update.", service.ServiceName, service.FilePath, newTag)
-					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("ℹ️ Service %s already has version %s, no update needed.", service.ServiceName, newTag))
-					continue
-				}
-				err := updater.UpdateAndPushService(repoPath, service.FilePath, service.ServiceName, newTag, appConfig.Git.SSHKeyPath)
-				if err != nil {
-					log.Printf("Error updating service %s: %v", service.ServiceName, err)
-					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error updating service %s: %v", service.ServiceName, err))
-				} else {
-					log.Println("Update successful!")
-					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("✅ Update successful for service %s to version %s!", service.ServiceName, newTag))
-				}
-			}
-		}
-	} else if strings.HasPrefix(callbackData, "ignore:") {
-		// Парсим callback data, чтобы получить имя образа и тег для игнорирования
-		parts := strings.Split(callbackData, ":")
-		if len(parts) != 3 {
-			log.Printf("Invalid ignore callback data format: %s", callbackData)
-			return
-		}
-		fullImageName := parts[1]
-		tagToIgnore := parts[2]
-
-		log.Printf("Received ignore request for image: %s, version: %s", fullImageName, tagToIgnore)
-
-		err := sl.Add(fullImageName, tagToIgnore)
-		if err != nil {
-			log.Printf("Error adding update to skip list: %v", err)
-		} else {
-			log.Printf("Update for %s with tag %s has been added to the skip list.", fullImageName, tagToIgnore)
-		}
+// Кодирует данные для callback-кнопки Telegram
+func encodeCallbackData(prefix, fullImageName, tag string) string {
+	raw := fullImageName + ":" + tag
+	enc := base64.RawURLEncoding.EncodeToString([]byte(raw))
+	data := prefix + ":" + enc
+	if len(data) <= 64 {
+		return data
 	}
-	// Отправляем пользователю подтверждение и удаляем исходное сообщение
-	deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
-	_, err := bot.Request(deleteConfig)
-	if err != nil {
-		log.Printf("Error deleting message: %v", err)
-	}
+	// fallback на sha1
+	hash := sha1.Sum([]byte(raw))
+	return prefix + ":h:" + hex.EncodeToString(hash[:])
 }

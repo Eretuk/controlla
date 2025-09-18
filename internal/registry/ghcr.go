@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type GhcrClient struct {
@@ -17,7 +18,7 @@ func NewGhcrClient() *GhcrClient {
 	}
 }
 
-// GetTags retrieves all image tags for a given image.
+// GetTags retrieves all image tags for a given image, handling pagination.
 func (c *GhcrClient) GetTags(image string) ([]string, error) {
 	// Step 1: Request an anonymous token
 	authURL := fmt.Sprintf("https://ghcr.io/token?service=ghcr.io&scope=repository:%s:pull", image)
@@ -45,33 +46,69 @@ func (c *GhcrClient) GetTags(image string) ([]string, error) {
 	}
 	token := authData.Token
 
-	// Step 2: Use the token to get the tags list
-	url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list", image)
-	req, err = http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tags request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	// Step 2: Use the token to get the tags list with pagination
+	var allTags []string
+	url := fmt.Sprintf("https://ghcr.io/v2/%s/tags/list?n=200", image)
+	for {
+		req, err = http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tags request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err = c.Client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get GHCR tags: %w", err)
-	}
-	defer resp.Body.Close()
+		resp, err = c.Client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get GHCR tags: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("GHCR request failed with status code: %d", resp.StatusCode)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GHCR request failed with status code: %d", resp.StatusCode)
-	}
+		var result map[string]json.RawMessage
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode GHCR response: %w", err)
+		}
+		resp.Body.Close()
 
-	var result map[string]json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode GHCR response: %w", err)
-	}
+		var tags []string
+		if err := json.Unmarshal(result["tags"], &tags); err != nil {
+			return nil, fmt.Errorf("failed to parse tags from response: %w", err)
+		}
+		allTags = append(allTags, tags...)
 
-	var tags []string
-	if err := json.Unmarshal(result["tags"], &tags); err != nil {
-		return nil, fmt.Errorf("failed to parse tags from response: %w", err)
+		// Check for pagination
+		link := resp.Header.Get("Link")
+		if link == "" || !containsRelNext(link) {
+			break
+		}
+		nextURL := parseNextURL(link)
+		if nextURL == "" {
+			break
+		}
+		// GHCR иногда возвращает относительный путь, дополним до полного URL
+		if strings.HasPrefix(nextURL, "/") {
+			nextURL = "https://ghcr.io" + nextURL
+		}
+		url = nextURL
 	}
+	return allTags, nil
+}
 
-	return tags, nil
+// containsRelNext checks if the Link header contains rel="next"
+func containsRelNext(link string) bool {
+	return strings.Contains(link, `rel="next"`)
+}
+
+// parseNextURL extracts the next page URL from the Link header
+func parseNextURL(link string) string {
+	// Example: <https://ghcr.io/v2/immich-app/immich-server/tags/list?next_page_token=...&n=200>; rel="next"
+	parts := strings.Split(link, ";")
+	if len(parts) < 2 {
+		return ""
+	}
+	urlPart := strings.TrimSpace(parts[0])
+	urlPart = strings.Trim(urlPart, "<>")
+	return urlPart
 }
