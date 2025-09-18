@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -14,7 +16,7 @@ import (
 
 // UpdateAndPushService updates the image tag of a specified service in a docker-compose.yaml file,
 // commits the change to a Git repository, and pushes the commit to the remote repository.
-func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKeyPath string) error {
+func UpdateAndPushService(repoPath, filePath, serviceName, newTag, SSHKeyPath, authorName, authorEmail string) error {
 	logrus.Infof("Starting update for service '%s' in file '%s' to tag '%s'", serviceName, filePath, newTag)
 
 	// Reading and updating the docker-compose.yaml file
@@ -73,7 +75,13 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKey
 		return fmt.Errorf("could not add file to git: %w", err)
 	}
 
-	commit, err := worktree.Commit(fmt.Sprintf("Update %s to %s", serviceName, newTag), &git.CommitOptions{})
+	commit, err := worktree.Commit(fmt.Sprintf("Update %s to %s", serviceName, newTag), &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  authorName,
+			Email: authorEmail,
+			When:  time.Now(),
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("could not commit changes: %w", err)
 	}

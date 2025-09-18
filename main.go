@@ -117,7 +117,15 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("ℹ️ Service %s already has version %s, no update needed.", service.ServiceName, newTag))
 					continue
 				}
-				err := updater.UpdateAndPushService(repoPath, service.FilePath, service.ServiceName, newTag, appConfig.Git.SSHKeyPath)
+				err := updater.UpdateAndPushService(
+					repoPath,
+					service.FilePath,
+					service.ServiceName,
+					newTag,
+					appConfig.Git.SSHKeyPath,
+					appConfig.Git.AuthorName,
+					appConfig.Git.AuthorEmail,
+				)
 				if err != nil {
 					logrus.Errorf("Error updating service %s: %v", service.ServiceName, err)
 					notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error updating service %s: %v", service.ServiceName, err))

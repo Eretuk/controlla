@@ -2,6 +2,8 @@ git:
   repo_url: "git@example.git"
   local_repo_path: ./data/repos/myrepo
   branch: "main"
+  author_name: "Controlla Bot"
+  author_email: "bot@controlla.local"
 
 checker:
   watch_folder: services

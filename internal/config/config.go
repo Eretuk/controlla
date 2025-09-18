@@ -19,6 +19,8 @@ type AppConfig struct {
 		Branch        string `mapstructure:"branch"`
 		SSHKeyPath    string `mapstructure:"ssh_key_path"`
 		LocalRepoPath string `mapstructure:"local_repo_path"`
+		AuthorName    string `mapstructure:"author_name"`
+		AuthorEmail   string `mapstructure:"author_email"`
 	} `mapstructure:"git"`
 
 	Checker struct {
