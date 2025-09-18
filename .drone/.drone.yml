@@ -6,7 +6,7 @@ steps:
   - name: build and push
     image: plugins/docker
     settings:
-      repo: registry.example.com/youruser/controlla
+      repo: git.kolspace.cc/victor.kolomin/controlla
       registry: git.kolspace.cc
       tags:
         - ${DRONE_TAG}
