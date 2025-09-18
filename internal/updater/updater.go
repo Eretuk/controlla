@@ -2,21 +2,22 @@ package updater
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
-// UpdateAndPushService обновляет тег в файле docker-compose и пушит изменения в репозиторий.
+// UpdateAndPushService updates the image tag of a specified service in a docker-compose.yaml file,
+// commits the change to a Git repository, and pushes the commit to the remote repository.
 func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKeyPath string) error {
-	log.Printf("Starting update for service '%s' in file '%s' to tag '%s'", serviceName, filePath, newTag)
+	logrus.Infof("Starting update for service '%s' in file '%s' to tag '%s'", serviceName, filePath, newTag)
 
-	// 1. Читаем и парсим файл docker-compose.yaml
+	// Reading and updating the docker-compose.yaml file
 	yamlFile, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("could not read file: %w", err)
@@ -27,7 +28,7 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKey
 		return fmt.Errorf("could not unmarshal YAML: %w", err)
 	}
 
-	// 2. Находим и изменяем тег
+	// Finding and updating the service image tag
 	services, ok := data["services"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("invalid services structure in YAML")
@@ -40,7 +41,7 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKey
 
 	service["image"] = fmt.Sprintf("%s:%s", service["image"].(string)[:strings.LastIndex(service["image"].(string), ":")], newTag)
 
-	// 3. Записываем обновлённый YAML-файл
+	// 3. Writing the updated YAML back to the file
 	updatedYaml, err := yaml.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("could not marshal YAML: %w", err)
@@ -49,9 +50,9 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKey
 	if err := os.WriteFile(filePath, updatedYaml, 0644); err != nil {
 		return fmt.Errorf("could not write updated file: %w", err)
 	}
-	log.Println("docker-compose.yaml file updated successfully.")
+	logrus.Infof("docker-compose.yaml file updated successfully.")
 
-	// 4. Коммитим и пушим изменения
+	// 4. Committing and pushing the changes to the Git repository
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open Git repository: %w", err)
@@ -76,7 +77,7 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKey
 	if err != nil {
 		return fmt.Errorf("could not commit changes: %w", err)
 	}
-	log.Printf("New commit created: %s", commit)
+	logrus.Infof("New commit created: %s", commit)
 
 	publicKeys, err := ssh.NewPublicKeysFromFile("git", SSHKeyPath, "")
 	if err != nil {
@@ -89,7 +90,7 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag string, SSHKey
 	if err != nil {
 		return fmt.Errorf("could not push changes: %w", err)
 	}
-	log.Println("Changes pushed to remote repository successfully.")
+	logrus.Infof("Changes pushed to remote repository successfully.")
 
 	return nil
 }

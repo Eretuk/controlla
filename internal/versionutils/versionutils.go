@@ -1,11 +1,11 @@
 package versionutils
 
 import (
-	"log"
 	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/sirupsen/logrus"
 )
 
 // CheckForUpdate compares the current tag with the latest tag from the registry.
@@ -25,14 +25,14 @@ func CheckForUpdate(currentTag string, latestTags []string) (string, bool) {
 	// Парсим текущий тэг
 	currentVersion, err := semver.NewVersion(strings.TrimPrefix(currentTag, "v"))
 	if err != nil {
-		log.Printf("Could not parse current tag '%s' as SemVer. Skipping comparison.", currentTag)
+		logrus.Errorf("Could not parse current tag '%s' as SemVer. Skipping comparison.", currentTag)
 		return latest, false
 	}
 
 	// Парсим последний тэг
 	latestVersion, err := semver.NewVersion(strings.TrimPrefix(latest, "v"))
 	if err != nil {
-		log.Printf("Could not parse latest tag '%s' as SemVer. Skipping comparison.", latest)
+		logrus.Errorf("Could not parse latest tag '%s' as SemVer. Skipping comparison.", latest)
 		return latest, false
 	}
 
@@ -77,5 +77,3 @@ func GetLatestTags(tags []string, count int) []string {
 func NormalizeTag(tag string) string {
 	return strings.TrimPrefix(tag, "v")
 }
-
-// isIgnoredTag ... (остальной код функции isIgnoredTag) ...

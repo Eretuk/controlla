@@ -38,6 +38,7 @@ func NewDockerHubClient(user, pass string) *DockerHubClient {
 	}
 }
 
+// GetTags retrieves the list of tags for a given image from Docker Hub.
 func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 	// Get token from registry with username and password
 	authURL := fmt.Sprintf("https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull", image)
@@ -69,7 +70,6 @@ func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 	}
 	token := authData.Token
 
-	// Getting acess to registry
 	tagsURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/tags/list", image)
 
 	req, err = http.NewRequest(http.MethodGet, tagsURL, nil)
@@ -99,6 +99,27 @@ func (c *DockerHubClient) GetTags(image string) ([]string, error) {
 	return tagsData.Tags, nil
 }
 
+// GetDigest retrieves the digest for a specific image and tag from Docker Hub.
+func (c *DockerHubClient) GetDigest(image, tag string) (string, error) {
+	url := fmt.Sprintf("https://registry-1.docker.io/v2/%s/manifests/%s", image, tag)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("digest request failed: %s", string(body))
+	}
+	return resp.Header.Get("Docker-Content-Digest"), nil
+}
+
+// GetFullImageName constructs the full image name including the registry.
 func GetFullImageName(info *checker.DockerImageInfo) string {
 	// Специальный случай для официальных образов Docker Hub
 	if info.Registry == "docker.io" && strings.HasPrefix(info.Image, "library/") {

@@ -20,7 +20,7 @@ func NewGhcrClient() *GhcrClient {
 
 // GetTags retrieves all image tags for a given image, handling pagination.
 func (c *GhcrClient) GetTags(image string) ([]string, error) {
-	// Step 1: Request an anonymous token
+	// Request an anonymous token
 	authURL := fmt.Sprintf("https://ghcr.io/token?service=ghcr.io&scope=repository:%s:pull", image)
 	req, err := http.NewRequest(http.MethodGet, authURL, nil)
 	if err != nil {
@@ -87,7 +87,7 @@ func (c *GhcrClient) GetTags(image string) ([]string, error) {
 		if nextURL == "" {
 			break
 		}
-		// GHCR иногда возвращает относительный путь, дополним до полного URL
+		// Ensure the nextURL is absolute
 		if strings.HasPrefix(nextURL, "/") {
 			nextURL = "https://ghcr.io" + nextURL
 		}
@@ -111,4 +111,23 @@ func parseNextURL(link string) string {
 	urlPart := strings.TrimSpace(parts[0])
 	urlPart = strings.Trim(urlPart, "<>")
 	return urlPart
+}
+
+func (c *GhcrClient) GetDigest(image, tag string) (string, error) {
+	url := fmt.Sprintf("https://ghcr.io/v2/%s/manifests/%s", image, tag)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("digest request failed: %s", string(body))
+	}
+	return resp.Header.Get("Docker-Content-Digest"), nil
 }

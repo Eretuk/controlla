@@ -11,11 +11,11 @@ checker:
   skip_list_file: "skipped.yaml"
   ignore_keywords:
     - rc
-    - beta
     - alpha
     - ubi
     - test
     - debug
     - nightly
     - arm64v8
+    - arm32v7
     - ubuntu
