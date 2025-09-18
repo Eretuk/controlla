@@ -122,9 +122,10 @@ trigger:
 
 ## Environment Variables
 
-- `TELEGRAM_TOKEN` — Telegram bot token
-- `TELEGRAM_CHAT_ID` — Chat ID for notifications
-- `DOCKER_USER` / `DOCKER_PASS` — for private DockerHub access (if needed)
+- `CONTROLLA__TELEGRAM__TOKEN` — Telegram bot token
+- `CONTROLLA__TELEGRAM__CHAT__ID` — Chat ID for notifications
+- `CONTROLLA__DOCKERHUB__USERNAME` — username for private DockerHub access (if needed)
+- `CONTROLLA__DOCKERHUB__PASSWORD` — token for private DockerHub access (if needed)
 
 ---
 
