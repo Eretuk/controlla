@@ -168,6 +168,26 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 			logrus.Infof("Update for %s with tag %s has been added to the skip list.", fullImageName, tagToIgnore)
 		}
 	}
+	// --- MODIFICATION: Clear ALL related notifications/warnings for this image ---
+	var fullImageName string
+	if strings.HasPrefix(callbackData, "update_to:") {
+		fullImageName, _, _ = decodeCallbackData(callbackData, "update_to")
+	} else if strings.HasPrefix(callbackData, "ignore:") {
+		fullImageName, _, _ = decodeCallbackData(callbackData, "ignore")
+	}
+
+	if fullImageName != "" {
+		sentNotificationsMutex.Lock()
+		for key := range sentNotifications {
+			if strings.HasPrefix(key, fullImageName+":") {
+				delete(sentNotifications, key)
+			}
+		}
+		sentNotificationsMutex.Unlock()
+		logrus.Debugf("Cleared all pending notifications/warnings for %s after user action.", fullImageName)
+	}
+	// --- END MODIFICATION ---
+
 	// Send confirmation to user and delete original message
 	deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
 	_, err := bot.Request(deleteConfig)
@@ -272,7 +292,6 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			logrus.Infof("Shutting down...")
 			return
 		case <-ticker.C:
 			runCheck(ctx, appConfig, bot, sl, dockerHubClient, ghcrClient)
@@ -332,40 +351,65 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 		case <-ctx.Done():
 			return
 		default:
-			logrus.Infof("Parsing image: Registry=%s, Image=%s, Tag=%s", services[0].ImageInfo.Registry, services[0].ImageInfo.Image, services[0].ImageInfo.Tag)
+			currentImageTag := services[0].ImageInfo.Tag
+			logrus.Infof("Parsing image: Registry=%s, Image=%s, Tag=%s", services[0].ImageInfo.Registry, services[0].ImageInfo.Image, currentImageTag)
 
-			if sl.IsSkipped(fullImageName, services[0].ImageInfo.Tag) {
-				logrus.Infof("Skipping update for %s. It's in the skip list.", fullImageName)
+			// --- MODIFICATION: Clear notifications if image is skipped/ignored ---
+			if sl.IsSkipped(fullImageName, currentImageTag) || sl.IsImageIgnored(fullImageName) {
+				if sl.IsSkipped(fullImageName, currentImageTag) {
+					logrus.Infof("Skipping update for %s. It's in the skip list.", fullImageName)
+				} else {
+					logrus.Infof("Image %s is globally ignored (skipped.yaml), skipping.", fullImageName)
+				}
+				sentNotificationsMutex.Lock()
+				for key := range sentNotifications {
+					if strings.HasPrefix(key, fullImageName+":") {
+						delete(sentNotifications, key)
+					}
+				}
+				sentNotificationsMutex.Unlock()
 				continue
 			}
-
-			if sl.IsImageIgnored(fullImageName) {
-				logrus.Infof("Image %s is globally ignored (skipped.yaml), skipping.", fullImageName)
-				continue
-			}
+			// --- END MODIFICATION ---
 
 			var tags []string
 			var err error
+			registryName := services[0].ImageInfo.Registry
 
-			switch services[0].ImageInfo.Registry {
+			switch registryName {
 			case "docker.io":
 				tags, err = dockerHubClient.GetTags(services[0].ImageInfo.Image)
 			case "ghcr.io":
 				tags, err = ghcrClient.GetTags(services[0].ImageInfo.Image)
 			default:
-				client, ok := commonClients[services[0].ImageInfo.Registry]
-				if ok {
-					tags, err = client.GetTags(services[0].ImageInfo.Image)
-				} else {
-					logrus.Infof("Skipping unsupported registry: %s", services[0].ImageInfo.Registry)
-					continue
+				// --- MODIFICATION: Use generic client for all other registries ---
+				logrus.Debugf("Using generic registry client for %s", registryName)
+				client, ok := commonClients[registryName]
+				if !ok {
+					// Create a new client on-the-fly if not already created
+					client = registry.NewCommonRegistryClient(registryName)
+					commonClients[registryName] = client
 				}
+				tags, err = client.GetTags(services[0].ImageInfo.Image)
+				// --- END MODIFICATION ---
 			}
 
 			logrus.Debugf("Avaliable tags for %s: %v", fullImageName, tags)
 
 			if err != nil {
 				logrus.Errorf("Error getting tags for %s: %v", fullImageName, err)
+				// --- MODIFICATION: Suppress duplicate error messages ---
+				notificationKey := fullImageName + ":error_getting_tags"
+				sentNotificationsMutex.Lock()
+				if sentNotifications[notificationKey] {
+					sentNotificationsMutex.Unlock()
+					continue
+				}
+				sentNotifications[notificationKey] = true
+				sentNotificationsMutex.Unlock()
+				chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
+				notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("❌ Error getting tags for %s: %v", fullImageName, err))
+				// --- END MODIFICATION ---
 				continue
 			}
 
@@ -373,7 +417,7 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			latestTags := versionutils.SortAndFilterTags(tags, appConfig.Checker.ProposedTagsCount, appConfig.Checker.IgnoreKeywords)
 			if len(latestTags) == 0 {
 				logrus.Warnf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template. Available tags: %v",
-					fullImageName, services[0].ImageInfo.Tag, tags)
+					fullImageName, currentImageTag, tags)
 
 				currentDigest, err1 := getDigestForImage(
 					services[0].ImageInfo.Registry,
@@ -395,9 +439,21 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 
 				if err1 == nil && err2 == nil && currentDigest != "" && latestDigest != "" {
 					if currentDigest != latestDigest {
-						logrus.Warnf("🚨 Digest update for %s. Current tag: %s, 'latest' tag digest differs!", fullImageName, services[0].ImageInfo.Tag)
+						logrus.Warnf("🚨 Digest update for %s. Current tag: %s, 'latest' tag digest differs!", fullImageName, currentImageTag)
+						// --- MODIFICATION: Suppress duplicate digest update messages ---
+						notificationKey := fullImageName + ":digest_update"
+						sentNotificationsMutex.Lock()
+						if sentNotifications[notificationKey] {
+							sentNotificationsMutex.Unlock()
+							continue
+						}
+						sentNotifications[notificationKey] = true
+						sentNotificationsMutex.Unlock()
+						chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
+						notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("🚨 Digest update for %s. Current tag: %s, 'latest' tag digest differs!", fullImageName, currentImageTag))
+						// --- END MODIFICATION ---
 					} else {
-						logrus.Infof("%s is actual by digest. Current tag: %s", fullImageName, services[0].ImageInfo.Tag)
+						logrus.Infof("%s is actual by digest. Current tag: %s", fullImageName, currentImageTag)
 					}
 				} else {
 					logrus.Errorf("Can't check updates for %s. No SemVer tags and no digest fallback.", fullImageName)
@@ -407,15 +463,28 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 
 			// Check the latest tag is newer than the current tag
 			latestAvailable := latestTags[0]
-			currentVersion, err := semver.NewVersion(services[0].ImageInfo.Tag)
+			// --- MODIFICATION: Try to normalize current tag before parsing ---
+			normalizedCurrentTag := versionutils.TryNormalizeTagForSemVer(currentImageTag)
+			currentVersion, err := semver.NewVersion(strings.TrimPrefix(normalizedCurrentTag, "v"))
+			// --- END MODIFICATION ---
 			if err != nil {
 				logrus.Warnf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template. Available tags: %v",
-					fullImageName, services[0].ImageInfo.Tag, tags)
+					fullImageName, currentImageTag, tags)
+				// --- MODIFICATION: Suppress duplicate warning messages ---
+				notificationKey := fullImageName + ":" + currentImageTag + ":non_semver_warning"
+				sentNotificationsMutex.Lock()
+				if sentNotifications[notificationKey] {
+					sentNotificationsMutex.Unlock()
+					continue
+				}
+				sentNotifications[notificationKey] = true
+				sentNotificationsMutex.Unlock()
 				chatID, _ := strconv.ParseInt(appConfig.TelegramChatID, 10, 64)
-				notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, services[0].ImageInfo.Tag))
+				notifier.SendTelegramMessage(bot, chatID, fmt.Sprintf("⚠️ Can't check updates for %s. Current tag: %s, it is not use SemVer template.", fullImageName, currentImageTag))
+				// --- END MODIFICATION ---
 				continue
 			}
-			latestVersion, _ := semver.NewVersion(latestAvailable)
+			latestVersion, _ := semver.NewVersion(strings.TrimPrefix(latestAvailable, "v"))
 
 			if latestVersion.GreaterThan(currentVersion) {
 				for _, tag := range latestTags {
@@ -473,8 +542,13 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 					}
 					notifier.SendInteractiveMessage(bot, appConfig.TelegramChatID, message, []string{tag}, callbackData)
 				}
+				// --- MODIFICATION: Clear warnings if an update is found ---
+				sentNotificationsMutex.Lock()
+				delete(sentNotifications, fullImageName+":"+currentImageTag+":non_semver_warning")
+				sentNotificationsMutex.Unlock()
+				// --- END MODIFICATION ---
 			} else {
-				logrus.Infof("✅ %s is actual. Current tag: %s", fullImageName, services[0].ImageInfo.Tag)
+				logrus.Infof("✅ %s is actual. Current tag: %s", fullImageName, currentImageTag)
 				// --- NEW LOGIC: Clear any pending notifications for this image if it's now actual ---
 				sentNotificationsMutex.Lock()
 				for key := range sentNotifications {

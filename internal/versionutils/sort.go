@@ -29,8 +29,13 @@ func SortAndFilterTags(tags []string, n int, ignoreKeywords []string) []string {
 		if isWeirdTag(tag) {
 			continue
 		}
-		cleanTag := strings.TrimPrefix(tag, "v")
+
+		// --- MODIFICATION: Try to normalize tag before parsing as SemVer ---
+		normalizedTag := TryNormalizeTagForSemVer(tag)
+		cleanTag := strings.TrimPrefix(normalizedTag, "v")
 		v, err := semver.NewVersion(cleanTag)
+		// --- END MODIFICATION ---
+
 		if err == nil {
 			uniqueVersions[v.String()] = v
 			tagMap[v.String()] = tag // сохраняем оригинальный тег!

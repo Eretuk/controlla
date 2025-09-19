@@ -1,7 +1,9 @@
 package versionutils
 
 import (
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -76,4 +78,31 @@ func GetLatestTags(tags []string, count int) []string {
 
 func NormalizeTag(tag string) string {
 	return strings.TrimPrefix(tag, "v")
+}
+
+// TryNormalizeTagForSemVer attempts to normalize a non-standard tag into a SemVer-compatible format.
+// For example, "1.2.3.4" might become "1.2.3-rev.4".
+// This is a heuristic approach for specific non-SemVer patterns.
+func TryNormalizeTagForSemVer(tag string) string {
+	// If it already parses as SemVer, no need to normalize
+	if _, err := semver.NewVersion(strings.TrimPrefix(tag, "v")); err == nil {
+		return tag
+	}
+
+	// Pattern: X.Y.Z.A (e.g., 1.2.3.4)
+	parts := strings.Split(tag, ".")
+	if len(parts) == 4 {
+		// Try to form X.Y.Z-rev.A
+		if _, err := strconv.Atoi(parts[3]); err == nil { // Check if the last part is a number
+			normalized := fmt.Sprintf("%s.%s.%s-rev.%s", parts[0], parts[1], parts[2], parts[3])
+			if _, err := semver.NewVersion(normalized); err == nil {
+				logrus.Debugf("Normalized tag '%s' to '%s' for SemVer parsing.", tag, normalized)
+				return normalized
+			}
+		}
+	}
+
+	// Add other normalization patterns here if needed
+
+	return tag // Return original tag if no normalization helps
 }
