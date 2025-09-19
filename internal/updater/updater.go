@@ -14,9 +14,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// UpdateAndPushService updates the image tag of a specified service in a docker-compose.yaml file,
-// commits the change to a Git repository, and pushes the commit to the remote repository.
-func UpdateAndPushService(repoPath, filePath, serviceName, newTag, SSHKeyPath, authorName, authorEmail string) error {
+// UpdateAndPushService updates a service's image tag in its docker-compose file and pushes the change to the Git repository.
+func UpdateAndPushService(repoPath, filePath, serviceName, newTag, sshKeyPath, authorName, authorEmail string) error {
 	logrus.Infof("Starting update for service '%s' in file '%s' to tag '%s'", serviceName, filePath, newTag)
 
 	// Reading and updating the docker-compose.yaml file
@@ -57,8 +56,15 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag, SSHKeyPath, a
 	// 4. Committing and pushing the changes to the Git repository
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
-		return fmt.Errorf("failed to open Git repository: %w", err)
+		return fmt.Errorf("could not open repository: %w", err)
 	}
+
+	// --- NEW: Create auth method using SSH key ---
+	auth, err := ssh.NewPublicKeysFromFile("git", sshKeyPath, "")
+	if err != nil {
+		return fmt.Errorf("cannot generate public keys from file: %w", err)
+	}
+	// --- END NEW ---
 
 	worktree, err := repo.Worktree()
 	if err != nil {
@@ -75,6 +81,19 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag, SSHKeyPath, a
 		return fmt.Errorf("could not add file to git: %w", err)
 	}
 
+	// --- NEW: Pull with rebase before pushing to sync with remote changes ---
+	logrus.Info("Pulling latest changes with rebase before pushing...")
+	pullOpts := &git.PullOptions{
+		RemoteName: "origin",
+		Auth:       auth,
+	}
+	err = worktree.Pull(pullOpts)
+	// git.NoErrAlreadyUpToDate is a normal outcome, not an error we should stop for.
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("could not pull %w", err)
+	}
+	// --- END NEW ---
+
 	commit, err := worktree.Commit(fmt.Sprintf("Update %s to %s", serviceName, newTag), &git.CommitOptions{
 		Author: &object.Signature{
 			Name:  authorName,
@@ -83,22 +102,18 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag, SSHKeyPath, a
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("could not commit changes: %w", err)
+		return fmt.Errorf("could not create commit: %w", err)
 	}
 	logrus.Infof("New commit created: %s", commit)
 
-	publicKeys, err := ssh.NewPublicKeysFromFile("git", SSHKeyPath, "")
-	if err != nil {
-		return fmt.Errorf("failed to read SSH key: %w", err)
-	}
-	auth := publicKeys
+	// Push the changes to the remote repository
+	logrus.Info("Pushing changes to remote repository...")
 	err = repo.Push(&git.PushOptions{
 		Auth: auth,
 	})
 	if err != nil {
 		return fmt.Errorf("could not push changes: %w", err)
 	}
-	logrus.Infof("Changes pushed to remote repository successfully.")
 
 	return nil
 }
