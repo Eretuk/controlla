@@ -45,6 +45,11 @@ var commonClients = map[string]*registry.CommonRegistryClient{
 var updateCache = make(map[string]UpdateInfo)
 var cacheMutex sync.Mutex
 
+// sentNotifications stores a record of notifications already sent to Telegram
+// to prevent sending duplicates for the same image/tag combination.
+var sentNotifications = make(map[string]bool)
+var sentNotificationsMutex sync.Mutex // Add mutex for thread-safe access
+
 // For hash-mode needed map hash → {fullImageName, tag}
 var callbackHashMap = make(map[string][2]string) // [fullImageName, tag]
 
@@ -85,9 +90,15 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 
 		logrus.Infof("Received update request for image: %s, tag: %s", fullImageName, newTag)
 
+		// --- NEW: Remove from sentNotifications when acted upon ---
+		sentNotificationsMutex.Lock()
+		delete(sentNotifications, fullImageName+":"+newTag)
+		sentNotificationsMutex.Unlock()
+		// --- End NEW ---
+
 		// Looking for servies to update
 		repoPath := appConfig.Git.LocalRepoPath
-		relevantFiles, err := checker.FindRelevantFiles(repoPath)
+		relevantFiles, err := checker.FindRelevantFiles(repoPath, appConfig.Checker.WatchFolder)
 		if err != nil {
 			logrus.Errorf("Error finding relevant files: %v", err)
 			notifier.SendTelegramMessage(bot, callback.Message.Chat.ID, fmt.Sprintf("❌ Error finding relevant files: %v", err))
@@ -143,6 +154,12 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 		}
 
 		logrus.Infof("Received ignore request for image: %s, version: %s", fullImageName, tagToIgnore)
+
+		// --- NEW: Remove from sentNotifications when acted upon ---
+		sentNotificationsMutex.Lock()
+		delete(sentNotifications, fullImageName+":"+tagToIgnore)
+		sentNotificationsMutex.Unlock()
+		// --- End NEW ---
 
 		err := sl.Add(fullImageName, tagToIgnore)
 		if err != nil {
@@ -286,12 +303,12 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 	logrus.Infof("Repository cloned or pulled successfully.")
 
 	// Get list of relevant files in the repository
-	relevantFiles, err := checker.FindRelevantFiles(repoPath)
+	relevantFiles, err := checker.FindRelevantFiles(repoPath, appConfig.Checker.WatchFolder) // <-- Передаем watchFolder
 	if err != nil {
 		logrus.Errorf("Error finding relevant files: %v", err)
 		return
 	}
-	logrus.Infof("Found %d relevant files.", len(relevantFiles))
+	logrus.Infof("Found %d relevant files in watch folder '%s'.", len(relevantFiles), appConfig.Checker.WatchFolder) // <-- Обновляем лог
 
 	// Parse relevant files to extract services and their images
 	services, err := checker.ParseRelevantFiles(relevantFiles)
@@ -411,6 +428,19 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 						logrus.Infof("Tag %s for %s is already in use. Skipping notification.", tag, fullImageName)
 						continue
 					}
+
+					// --- NEW LOGIC: Check if notification already sent ---
+					notificationKey := fullImageName + ":" + tag
+					sentNotificationsMutex.Lock()
+					if sentNotifications[notificationKey] {
+						logrus.Infof("Notification for %s with tag %s already sent. Skipping duplicate.", fullImageName, tag)
+						sentNotificationsMutex.Unlock()
+						continue
+					}
+					sentNotifications[notificationKey] = true // Mark as sent
+					sentNotificationsMutex.Unlock()
+					// --- END NEW LOGIC ---
+
 					logrus.Infof("🚨 New update for %s. Current tag: %s, Available: %s", fullImageName, services[0].ImageInfo.Tag, tag)
 					// Generate unique ID for this update
 					// Using timestamp for simplicity; in production, consider a more robust method
@@ -445,6 +475,15 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 				}
 			} else {
 				logrus.Infof("✅ %s is actual. Current tag: %s", fullImageName, services[0].ImageInfo.Tag)
+				// --- NEW LOGIC: Clear any pending notifications for this image if it's now actual ---
+				sentNotificationsMutex.Lock()
+				for key := range sentNotifications {
+					if strings.HasPrefix(key, fullImageName+":") {
+						delete(sentNotifications, key)
+					}
+				}
+				sentNotificationsMutex.Unlock()
+				// --- END NEW LOGIC ---
 			}
 		}
 	}

@@ -2,10 +2,12 @@ package checker
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,35 +26,38 @@ type ServiceInfo struct {
 	ImageInfo   DockerImageInfo
 }
 
-// FindRelevantFiles рекурсивно ищет файлы docker-compose.yml и docker-compose.yaml в директории.
-func FindRelevantFiles(searchDir string) ([]string, error) {
-	var filePaths []string
+// FindRelevantFiles looking for relevant files in the repository or specified watchFolder.
+func FindRelevantFiles(repoPath, watchFolder string) ([]string, error) {
+	var relevantFiles []string
+	searchPath := repoPath
 
-	err := filepath.WalkDir(searchDir, func(path string, d os.DirEntry, err error) error {
+	// Если указана watchFolder и она не пуста, добавляем ее к пути поиска
+	if watchFolder != "" {
+		searchPath = filepath.Join(repoPath, watchFolder)
+		logrus.Debugf("Looking for relevant files in folder: %s", searchPath)
+	} else {
+		logrus.Debugf("Looking for relevant files in repository: %s", searchPath)
+	}
+
+	err := filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("error accessing path %q: %v", path, err)
+			logrus.Errorf("Error with path %s: %v", path, err)
+			return err
 		}
-
-		if d.IsDir() {
-			return nil
+		if !d.IsDir() && (strings.HasSuffix(d.Name(), "docker-compose.yaml") || strings.HasSuffix(d.Name(), "docker-compose.yml")) {
+			relevantFiles = append(relevantFiles, path)
 		}
-
-		fileName := d.Name()
-		if fileName == "docker-compose.yml" || fileName == "docker-compose.yaml" {
-			filePaths = append(filePaths, path)
-		}
-
 		return nil
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error in search in directory: %w", err)
 	}
 
-	return filePaths, nil
+	return relevantFiles, nil
 }
 
-// ParseRelevantFiles считывает и парсит указанные файлы, возвращая список ServiceInfo.
+// Serarch and Parse relevant files and extract service and image information.
 func ParseRelevantFiles(filePaths []string) ([]ServiceInfo, error) {
 	var services []ServiceInfo
 
@@ -69,12 +74,12 @@ func ParseRelevantFiles(filePaths []string) ([]ServiceInfo, error) {
 		}
 
 		if err := yaml.Unmarshal(data, &composeData); err != nil {
-			continue // Игнорируем файлы с ошибками YAML
+			continue // Ignore files that cannot be parsed
 		}
 
 		for serviceName, service := range composeData.Services {
 			if service.Image == "" {
-				continue // Пропускаем сервисы без указанного образа
+				continue // Skip services without an image
 			}
 
 			parsedImage := ParseDockerImage(service.Image)
@@ -91,7 +96,9 @@ func ParseRelevantFiles(filePaths []string) ([]ServiceInfo, error) {
 	return services, nil
 }
 
-// ParseDockerImage разбивает строку образа на компоненты.
+// ParseDockerImage decomposes a Docker image string into its components:
+// registry, image name, tag, and digest.
+// It handles various formats of Docker image strings.
 func ParseDockerImage(imageString string) DockerImageInfo {
 	parsed := DockerImageInfo{}
 
