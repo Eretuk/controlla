@@ -18,7 +18,34 @@ import (
 func UpdateAndPushService(repoPath, filePath, serviceName, newTag, sshKeyPath, authorName, authorEmail string) error {
 	logrus.Infof("Starting update for service '%s' in file '%s' to tag '%s'", serviceName, filePath, newTag)
 
-	// Reading and updating the docker-compose.yaml file
+	// --- CORRECT LOGIC: Open repo and pull first to ensure we are up-to-date ---
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("could not open repository: %w", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	auth, err := ssh.NewPublicKeysFromFile("git", sshKeyPath, "")
+	if err != nil {
+		return fmt.Errorf("cannot generate public keys from file: %w", err)
+	}
+
+	logrus.Info("Pulling latest changes before modifying files...")
+	pullOpts := &git.PullOptions{
+		RemoteName: "origin",
+		Auth:       auth,
+	}
+	err = worktree.Pull(pullOpts)
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("could not pull changes: %w", err)
+	}
+	// --- END CORRECT LOGIC ---
+
+	// 1. Reading and updating the docker-compose.yaml file
 	yamlFile, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("could not read file: %w", err)
@@ -29,7 +56,7 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag, sshKeyPath, a
 		return fmt.Errorf("could not unmarshal YAML: %w", err)
 	}
 
-	// Finding and updating the service image tag
+	// 2. Finding and updating the service image tag
 	services, ok := data["services"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("invalid services structure in YAML")
@@ -54,23 +81,6 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag, sshKeyPath, a
 	logrus.Infof("docker-compose.yaml file updated successfully.")
 
 	// 4. Committing and pushing the changes to the Git repository
-	repo, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return fmt.Errorf("could not open repository: %w", err)
-	}
-
-	// --- NEW: Create auth method using SSH key ---
-	auth, err := ssh.NewPublicKeysFromFile("git", sshKeyPath, "")
-	if err != nil {
-		return fmt.Errorf("cannot generate public keys from file: %w", err)
-	}
-	// --- END NEW ---
-
-	worktree, err := repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("failed to get worktree: %w", err)
-	}
-
 	relativePath, err := filepath.Rel(repoPath, filePath)
 	if err != nil {
 		return fmt.Errorf("could not get relative path: %w", err)
@@ -80,19 +90,6 @@ func UpdateAndPushService(repoPath, filePath, serviceName, newTag, sshKeyPath, a
 	if err != nil {
 		return fmt.Errorf("could not add file to git: %w", err)
 	}
-
-	// --- NEW: Pull with rebase before pushing to sync with remote changes ---
-	logrus.Info("Pulling latest changes with rebase before pushing...")
-	pullOpts := &git.PullOptions{
-		RemoteName: "origin",
-		Auth:       auth,
-	}
-	err = worktree.Pull(pullOpts)
-	// git.NoErrAlreadyUpToDate is a normal outcome, not an error we should stop for.
-	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return fmt.Errorf("could not pull %w", err)
-	}
-	// --- END NEW ---
 
 	commit, err := worktree.Commit(fmt.Sprintf("Update %s to %s", serviceName, newTag), &git.CommitOptions{
 		Author: &object.Signature{
