@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/golang:1.25.1-alpine3.22 AS builder
+FROM docker.io/library/golang:1.25.1-alpine3.22 AS builder
 
 WORKDIR /app
 COPY . .
@@ -7,7 +7,7 @@ COPY . .
 RUN go build -o controlla .
 
 # Final minimal image
-FROM public.ecr.aws/docker/library/alpine:3.22.1
+FROM docker.io/library/alpine:3.22.1
 WORKDIR /app
 
 # Copy the binary and config file from the builder stage
