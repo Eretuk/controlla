@@ -36,11 +36,6 @@ type UpdateInfo struct {
 	NewTag   string
 }
 
-var commonClients = map[string]*registry.CommonRegistryClient{
-	"docker.gitea.com": registry.NewCommonRegistryClient("docker.gitea.com"),
-	"quay.io":          registry.NewCommonRegistryClient("quay.io"),
-}
-
 // updateCache stores information about found updates.
 var updateCache = make(map[string]UpdateInfo)
 var cacheMutex sync.Mutex
@@ -90,11 +85,10 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 
 		logrus.Infof("Received update request for image: %s, tag: %s", fullImageName, newTag)
 
-		// --- NEW: Remove from sentNotifications when acted upon ---
+		// Remove from sentNotifications when acted upon ---
 		sentNotificationsMutex.Lock()
 		delete(sentNotifications, fullImageName+":"+newTag)
 		sentNotificationsMutex.Unlock()
-		// --- End NEW ---
 
 		// Looking for servies to update
 		repoPath := appConfig.Git.LocalRepoPath
@@ -155,11 +149,10 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 
 		logrus.Infof("Received ignore request for image: %s, version: %s", fullImageName, tagToIgnore)
 
-		// --- NEW: Remove from sentNotifications when acted upon ---
+		// Remove from sentNotifications when acted upon ---
 		sentNotificationsMutex.Lock()
 		delete(sentNotifications, fullImageName+":"+tagToIgnore)
 		sentNotificationsMutex.Unlock()
-		// --- End NEW ---
 
 		err := sl.Add(fullImageName, tagToIgnore)
 		if err != nil {
@@ -168,7 +161,7 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 			logrus.Infof("Update for %s with tag %s has been added to the skip list.", fullImageName, tagToIgnore)
 		}
 	}
-	// --- MODIFICATION: Clear ALL related notifications/warnings for this image ---
+	// Clear ALL related notifications/warnings for this image ---
 	var fullImageName string
 	if strings.HasPrefix(callbackData, "update_to:") {
 		fullImageName, _, _ = decodeCallbackData(callbackData, "update_to")
@@ -186,7 +179,6 @@ func handleCallbackQuery(bot *tgbotapi.BotAPI, callback *tgbotapi.CallbackQuery,
 		sentNotificationsMutex.Unlock()
 		logrus.Debugf("Cleared all pending notifications/warnings for %s after user action.", fullImageName)
 	}
-	// --- END MODIFICATION ---
 
 	// Send confirmation to user and delete original message
 	deleteConfig := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
@@ -285,8 +277,9 @@ func main() {
 	// Initizle registry clients
 	dockerHubClient := registry.NewDockerHubClient(appConfig.DockerUser, appConfig.DockerPass)
 	ghcrClient := registry.NewGhcrClient()
+	commonClients := make(map[string]*registry.CommonRegistryClient) // Created on-the-fly
 
-	runCheck(ctx, appConfig, bot, sl, dockerHubClient, ghcrClient)
+	runCheck(ctx, appConfig, bot, sl, dockerHubClient, ghcrClient, commonClients)
 
 	// Main loop: periodic checks
 	for {
@@ -294,13 +287,13 @@ func main() {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runCheck(ctx, appConfig, bot, sl, dockerHubClient, ghcrClient)
+			runCheck(ctx, appConfig, bot, sl, dockerHubClient, ghcrClient, commonClients)
 		}
 	}
 }
 
 // runCheck checks all container images for updates and sends notifications if updates are available.
-func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.BotAPI, sl *skiplist.SkipList, dockerHubClient *registry.DockerHubClient, ghcrClient *registry.GhcrClient) {
+func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.BotAPI, sl *skiplist.SkipList, dockerHubClient *registry.DockerHubClient, ghcrClient *registry.GhcrClient, commonClients map[string]*registry.CommonRegistryClient) {
 	logrus.Infof("Starting image update check...")
 
 	repoPath := appConfig.Git.LocalRepoPath
@@ -322,12 +315,12 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 	logrus.Infof("Repository cloned or pulled successfully.")
 
 	// Get list of relevant files in the repository
-	relevantFiles, err := checker.FindRelevantFiles(repoPath, appConfig.Checker.WatchFolder) // <-- Передаем watchFolder
+	relevantFiles, err := checker.FindRelevantFiles(repoPath, appConfig.Checker.WatchFolder)
 	if err != nil {
 		logrus.Errorf("Error finding relevant files: %v", err)
 		return
 	}
-	logrus.Infof("Found %d relevant files in watch folder '%s'.", len(relevantFiles), appConfig.Checker.WatchFolder) // <-- Обновляем лог
+	logrus.Infof("Found %d relevant files in watch folder '%s'.", len(relevantFiles), appConfig.Checker.WatchFolder) // Debug log
 
 	// Parse relevant files to extract services and their images
 	services, err := checker.ParseRelevantFiles(relevantFiles)
@@ -354,7 +347,7 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			currentImageTag := services[0].ImageInfo.Tag
 			logrus.Infof("Parsing image: Registry=%s, Image=%s, Tag=%s", services[0].ImageInfo.Registry, services[0].ImageInfo.Image, currentImageTag)
 
-			// --- MODIFICATION: Clear notifications if image is skipped/ignored ---
+			// Clear notifications if image is skipped/ignored ---
 			if sl.IsSkipped(fullImageName, currentImageTag) || sl.IsImageIgnored(fullImageName) {
 				if sl.IsSkipped(fullImageName, currentImageTag) {
 					logrus.Infof("Skipping update for %s. It's in the skip list.", fullImageName)
@@ -370,7 +363,6 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 				sentNotificationsMutex.Unlock()
 				continue
 			}
-			// --- END MODIFICATION ---
 
 			var tags []string
 			var err error
@@ -382,16 +374,14 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 			case "ghcr.io":
 				tags, err = ghcrClient.GetTags(services[0].ImageInfo.Image)
 			default:
-				// --- MODIFICATION: Use generic client for all other registries ---
-				logrus.Debugf("Using generic registry client for %s", registryName)
+				// Create client on-the-fly ---
 				client, ok := commonClients[registryName]
 				if !ok {
-					// Create a new client on-the-fly if not already created
+					logrus.Debugf("Creating new common client for registry: %s", registryName)
 					client = registry.NewCommonRegistryClient(registryName)
 					commonClients[registryName] = client
 				}
 				tags, err = client.GetTags(services[0].ImageInfo.Image)
-				// --- END MODIFICATION ---
 			}
 
 			logrus.Debugf("Avaliable tags for %s: %v", fullImageName, tags)
@@ -425,6 +415,7 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 					services[0].ImageInfo.Tag,
 					dockerHubClient,
 					ghcrClient,
+					commonClients, // Pass it here
 				)
 				latestDigest, err2 := getDigestForImage(
 					services[0].ImageInfo.Registry,
@@ -432,6 +423,7 @@ func runCheck(ctx context.Context, appConfig *config.AppConfig, bot *tgbotapi.Bo
 					"latest",
 					dockerHubClient,
 					ghcrClient,
+					commonClients, // And here
 				)
 
 				logrus.Debugf("Digest fallback for %s: currentDigest=%s (err=%v), latestDigest=%s (err=%v)",
@@ -579,7 +571,7 @@ func encodeCallbackData(prefix, fullImageName, tag string) string {
 }
 
 // Get image digest for given registry, image and tag
-func getDigestForImage(registryName, image, tag string, dockerHubClient *registry.DockerHubClient, ghcrClient *registry.GhcrClient) (string, error) {
+func getDigestForImage(registryName, image, tag string, dockerHubClient *registry.DockerHubClient, ghcrClient *registry.GhcrClient, commonClients map[string]*registry.CommonRegistryClient) (string, error) {
 	switch registryName {
 	case "docker.io":
 		return dockerHubClient.GetDigest(image, tag)
