@@ -1,3 +1,7 @@
+when:
+  event:
+    - tag
+
 steps:
   - name: build and push docker image
     image: woodpeckerci/plugin-docker-buildx
@@ -15,7 +19,3 @@ steps:
       cache_from:
         - git.kolspace.cc/victor.kolomin/controlla:latest
       cache_to: type=inline
-
-when:
-  event:
-    - tag
