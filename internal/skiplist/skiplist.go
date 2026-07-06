@@ -94,6 +94,9 @@ func (sl *SkipList) IsSkipped(image, newTag string) bool {
 
 // Check is if an image is in the ignored images list.
 func (sl *SkipList) IsImageIgnored(image string) bool {
+	sl.Lock()
+	defer sl.Unlock()
+
 	for _, img := range sl.data.IgnoredImages {
 		if img == image {
 			return true

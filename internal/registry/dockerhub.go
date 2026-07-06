@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // DockerTagsResponse represents the JSON response from the Docker Hub tags endpoint.
@@ -32,9 +33,11 @@ type DockerHubClient struct {
 
 func NewDockerHubClient(user, pass string) *DockerHubClient {
 	return &DockerHubClient{
-		Client: &http.Client{},
-		User:   user,
-		Pass:   pass,
+		Client: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+		User: user,
+		Pass: pass,
 	}
 }
 

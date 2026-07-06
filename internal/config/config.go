@@ -29,6 +29,10 @@ type AppConfig struct {
 		IntervalMinutes   int      `mapstructure:"interval_minutes"`
 		SkipListFile      string   `mapstructure:"skip_list_file"`
 		IgnoreKeywords    []string `mapstructure:"ignore_keywords"`
+		// GhcrMaxPages limits how many pagination pages are fetched from GHCR per image.
+		// Images like immich-server have thousands of tags spread across many pages,
+		// which exhausts rate-limit quota quickly. Default 0 means unlimited.
+		GhcrMaxPages int `mapstructure:"ghcr_max_pages"`
 	} `mapstructure:"checker"`
 }
 

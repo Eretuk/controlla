@@ -7,13 +7,13 @@ It scans your docker-compose files, checks for new image versions (using SemVer 
 
 ## Features
 
-- Scans and parses all services and images in docker-compose files (YAML/Jinja2)
+- Scans and parses all services and images in docker-compose files (YAML)
 - Checks for new image versions (SemVer-aware, with digest fallback)
 - Flexible filtering by keywords (e.g., `rc`, `nightly`, `test`, etc.)
 - Skip list and global ignore for images (`skipped.yaml`)
 - Interactive Telegram notifications (update/ignore buttons)
 - Automatic tag update and git push
-- Ready-to-use Docker image, CI/CD via DroneCI
+- Ready-to-use Docker image, CI/CD via DroneCI / Woodpecker
 
 ---
 
@@ -28,14 +28,21 @@ cd controlla
 
 ### 2. Configure
 
-Edit `config.yaml`:
+Edit `data/config.yaml`:
 
 ```yaml
 git:
-  repo_url: "git@git.kolspace.cc:victor.kolomin/test-homelab.git"
-  local_repo_path: ./repos/myrepo
+  repo_url: "git@git.kolspace.cc:youruser/homelab.git"
+  local_repo_path: ./data/repos/myrepo
   branch: "main"
-  ssh_key_path: "/app/id_rsa"
+  ssh_key_path: "/app/data/id_rsa"
+  author_name: "Controlla Bot"
+  author_email: "bot@controlla.local"
+
+# Optional: GitHub Personal Access Token for authenticated ghcr.io requests.
+# Significantly reduces the chance of hitting 429 rate limits.
+# Can also be set via the CONTROLLA__GITHUB__TOKEN environment variable.
+# github_token: "ghp_yourTokenHere"
 
 checker:
   watch_folder: services
@@ -58,7 +65,7 @@ checker:
 ```yaml
 updates:
   - image: ghcr.io/lldap/lldap
-    new_tag: 2024.0.0-01-16
+    new_tag: v2.0.0
 ignored_images:
   - ghcr.io/immich-app/postgres
 ```
@@ -68,11 +75,11 @@ ignored_images:
 ```sh
 docker build -t controlla .
 docker run --rm \
-  -v $(pwd)/config.yaml:/app/data/config.yaml \
-  -v $(pwd)/skipped.yaml:/app/data/skipped.yaml \
+  -v $(pwd)/data/config.yaml:/app/data/config.yaml \
+  -v $(pwd)/data/skipped.yaml:/app/data/skipped.yaml \
   -v ~/.ssh/id_rsa:/app/data/id_rsa:ro \
-  -e TELEGRAM_TOKEN=your_telegram_token \
-  -e TELEGRAM_CHAT_ID=your_chat_id \
+  -e CONTROLLA__TELEGRAM__TOKEN=your_telegram_token \
+  -e CONTROLLA__TELEGRAM__CHAT__ID=your_chat_id \
   controlla
 ```
 
@@ -82,11 +89,48 @@ docker run --rm \
 
 - Receive notifications about new image versions
 - Interactive buttons: "Update", "Ignore"
-- `/ignore_image <image>` command — add image to global ignore
+- `/ignore_image <image>` command — add image to global ignore list
 
 ---
 
-## CI/CD (DroneCI)
+## Environment Variables
+
+| Variable | Description |
+|---|---|
+| `CONTROLLA__TELEGRAM__TOKEN` | Telegram bot token |
+| `CONTROLLA__TELEGRAM__CHAT__ID` | Chat ID for notifications |
+| `CONTROLLA__DOCKERHUB__USERNAME` | DockerHub username (for private images) |
+| `CONTROLLA__DOCKERHUB__PASSWORD` | DockerHub password / token |
+| `CONTROLLA__GITHUB__TOKEN` | GitHub PAT for authenticated ghcr.io requests (recommended) |
+| `SSH_KEY_PATH` | Path to SSH key inside the container (default: `/app/data/id_rsa`) |
+| `SSH_KNOWN_HOSTS` | Path to known_hosts inside the container (default: `/app/data/known_hosts`) |
+
+---
+
+## Fixing 429 Rate Limit Errors on ghcr.io
+
+GHCR enforces strict rate limits for anonymous requests. If you see:
+
+```
+Error getting tags for ghcr.io/linuxserver/bookstack: GHCR request failed with status code: 429
+```
+
+Do the following:
+
+1. **Create a GitHub Personal Access Token (PAT)** with the `read:packages` scope:  
+   `GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens`
+
+2. **Pass the token** via environment variable:
+   ```sh
+   -e CONTROLLA__GITHUB__TOKEN=ghp_yourTokenHere
+   ```
+   or add `github_token: "ghp_yourTokenHere"` to `config.yaml`.
+
+Controlla also implements **automatic retry with backoff**: on a 429 response it reads the `Retry-After` header and waits accordingly (up to 3 retries). If the header is absent, exponential backoff is used: 10 s → 20 s → 40 s.
+
+---
+
+## CI/CD (DroneCI / Woodpecker)
 
 Example `.drone.yml` for automatic Docker image build and push on git tag:
 
@@ -100,12 +144,11 @@ steps:
     image: plugins/docker
     settings:
       repo: registry.example.com/youruser/controlla
-      registry: git.kolspace.cc
+      registry: registry.example.com
       tags:
         - ${DRONE_TAG}
       dockerfile: Dockerfile
       context: .
-      platforms: linux/amd64,linux/arm64
       username:
         from_secret: registry_user
       password:
@@ -116,45 +159,54 @@ trigger:
     - tag
 ```
 
-- The Docker image will be tagged with your git tag (e.g., `v0.1.0`).
-
----
-
-## Environment Variables
-
-- `CONTROLLA__TELEGRAM__TOKEN` — Telegram bot token
-- `CONTROLLA__TELEGRAM__CHAT__ID` — Chat ID for notifications
-- `CONTROLLA__DOCKERHUB__USERNAME` — username for private DockerHub access (if needed)
-- `CONTROLLA__DOCKERHUB__PASSWORD` — token for private DockerHub access (if needed)
-- `SSH_KNOWN_HOSTS` - path in container for known_host file (Default: /app/data/known_hosts)
-- `SSH_KEY_PATH` - path in container for ssh key file (Default: /app/data/id_rsa)
-
 ---
 
 ## Project Structure
 
 ```
 internal/
-  checker/        — service/image discovery and parsing
-  config/         — configuration management
-  gitrepo/        — git operations
+  checker/        — docker-compose service/image discovery and parsing
+  config/         — configuration loading (YAML + env overrides)
+  gitrepo/        — git operations (clone, pull, push)
   notifier/       — Telegram notifications
-  registry/       — registry clients (dockerhub, ghcr, etc.)
-  skiplist/       — skiplist and global ignore logic
+  registry/       — registry clients (dockerhub, ghcr, common)
+  skiplist/       — skip list and global ignore logic
   updater/        — tag update and git push
-  versionutils/   — version sorting and filtering
-main.go           — main service and polling logic
+  versionutils/   — SemVer sorting and filtering
+main.go           — main service loop and Telegram handler
 Dockerfile        — container build
-.drone.yml        — CI/CD pipeline
-config.yaml       — main config
-skipped.yaml      — skiplist and ignored images
+data/config.yaml  — main configuration file
+data/skipped.yaml — skip list and ignored images
 ```
+
+---
+
+## Changelog
+
+### Recent improvements
+
+#### GHCR 429 rate limit fix
+- Added **retry with backoff** for all ghcr.io requests: on a 429 response the `Retry-After` header is respected; exponential backoff (10 s → 20 s → 40 s) is used as a fallback. Up to 3 retries.
+- Added **GitHub Personal Access Token** support (`github_token` / `CONTROLLA__GITHUB__TOKEN`). Authenticated token requests to ghcr.io have a much higher rate limit than anonymous ones.
+- `GetDigest` on the GHCR client now also uses retry logic and proper authentication.
+
+#### HTTP client stability
+- Added a **15-second timeout** to `DockerHubClient` and `GhcrClient` — both previously had no timeout (only `CommonRegistryClient` did).
+
+#### Reduced registry pressure
+- Added a **2-second delay between image checks** in the main polling loop to avoid sending all requests in a burst.
+
+#### Data race fix
+- Added mutex locking to `skiplist.IsImageIgnored` — it was the only method that read shared data without holding the lock.
+
+#### Dependency consistency
+- `sort.go` and `main.go` now both use `github.com/Masterminds/semver/v3`. Previously v1 and v3 were mixed in the same binary.
 
 ---
 
 ## Roadmap
 
-- [ ] Web UI for skiplist management
+- [ ] Web UI for skip list management
 - [ ] Support for other messengers
 - [ ] Extended update analytics
 
@@ -166,5 +218,5 @@ MIT
 
 ---
 
-**Contacts:**   
+**Contacts:**  
 [Git.Kolspace](https://git.kolspace.cc/victor.kolomin/controlla)

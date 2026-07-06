@@ -1,15 +1,27 @@
 git:
-  repo_url: "git@example.git"
+  repo_url: "ssh://git@git-ssh.kolspace.cc:2222/victor.kolomin/homelab.git"
   local_repo_path: ./data/repos/myrepo
   branch: "main"
+  ssh_key_path: "/app/data/id_rsa"
   author_name: "Controlla Bot"
   author_email: "bot@controlla.local"
+
+# Optional: GitHub Personal Access Token for authenticated ghcr.io requests.
+# Significantly reduces the chance of hitting 429 rate limits.
+# Can also be set via the CONTROLLA__GITHUB__TOKEN environment variable.
+# github_token: "ghp_yourTokenHere"
 
 checker:
   watch_folder: services
   proposed_tags_count: 3
   interval_minutes: 15
-  skip_list_file: "skipped.yaml"
+  skip_list_file: "/app/data/skipped.yaml"
+  # Limit the number of pagination pages fetched from GHCR per image.
+  # Images like immich-server have thousands of tags across many pages and
+  # can exhaust the rate-limit quota quickly. 5 pages × 200 tags = 1000 tags,
+  # which is more than enough to find the latest SemVer version.
+  # Set to 0 for unlimited (original behaviour).
+  ghcr_max_pages: 5
   ignore_keywords:
     - rc
     - alpha

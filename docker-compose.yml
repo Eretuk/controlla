@@ -1,0 +1,36 @@
+# ssh-keyscan -p 2222 git-ssh.kolspace.cc >> ./data/known_hosts
+services:
+  controlla:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: controlla
+    restart: unless-stopped
+
+    environment:
+      # Required: Telegram bot token (from @BotFather)
+      CONTROLLA__TELEGRAM__TOKEN: "your_telegram_bot_token"
+
+      # Required: Telegram chat ID where notifications will be sent
+      CONTROLLA__TELEGRAM__CHAT__ID: "your_telegram_chat_id"
+
+      # Optional: DockerHub credentials (increases pull rate limits)
+      # CONTROLLA__DOCKERHUB__USERNAME: "your_dockerhub_username"
+      # CONTROLLA__DOCKERHUB__PASSWORD: "your_dockerhub_token"
+
+      # Optional but recommended: GitHub PAT with read:packages scope
+      # Prevents 429 rate limit errors from ghcr.io
+      # CONTROLLA__GITHUB__TOKEN: "ghp_yourGithubToken"
+
+    volumes:
+      # Main config file
+      - ./data/config.yaml:/app/data/config.yaml:ro
+
+      # Skip list (will be created automatically if not present)
+      - ./data/skipped.yaml:/app/data/skipped.yaml
+
+      # SSH private key for git push access (read-only)
+      - ~/.ssh/controlla:/app/data/id_rsa:ro
+
+      # SSH known_hosts to avoid host verification prompts
+      - ./data/known_hosts:/app/data/known_hosts:ro

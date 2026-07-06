@@ -80,20 +80,25 @@ func NormalizeTag(tag string) string {
 	return strings.TrimPrefix(tag, "v")
 }
 
-// TryNormalizeTagForSemVer attempts to normalize a non-standard tag into a SemVer-compatible format.
-// For example, "1.2.3.4" might become "1.2.3-rev.4".
-// This is a heuristic approach for specific non-SemVer patterns.
+// TryNormalizeTagForSemVer attempts to normalize a non-standard tag into a
+// SemVer-compatible format so it can be compared and sorted.
+// The original tag string is always preserved separately — normalization is
+// only used for version arithmetic, never for display or git operations.
+//
+// Supported patterns:
+//   - "1.2.3.4"     → "1.2.3-rev.4"   (four-part numeric)
+//   - "ee-1.2.3"    → "1.2.3"         (arbitrary letter prefix separated by "-")
+//   - "v-1.2.3"     → "1.2.3"         (same, with "v" prefix variant)
 func TryNormalizeTagForSemVer(tag string) string {
-	// If it already parses as SemVer, no need to normalize
+	// Already valid SemVer — nothing to do.
 	if _, err := semver.NewVersion(strings.TrimPrefix(tag, "v")); err == nil {
 		return tag
 	}
 
-	// Pattern: X.Y.Z.A (e.g., 1.2.3.4)
+	// Pattern: X.Y.Z.A  (e.g. "1.2.3.4", "26.03.20250318")
 	parts := strings.Split(tag, ".")
 	if len(parts) == 4 {
-		// Try to form X.Y.Z-rev.A
-		if _, err := strconv.Atoi(parts[3]); err == nil { // Check if the last part is a number
+		if _, err := strconv.Atoi(parts[3]); err == nil {
 			normalized := fmt.Sprintf("%s.%s.%s-rev.%s", parts[0], parts[1], parts[2], parts[3])
 			if _, err := semver.NewVersion(normalized); err == nil {
 				logrus.Debugf("Normalized tag '%s' to '%s' for SemVer parsing.", tag, normalized)
@@ -102,7 +107,16 @@ func TryNormalizeTagForSemVer(tag string) string {
 		}
 	}
 
-	// Add other normalization patterns here if needed
+	// Pattern: <prefix>-X.Y.Z  (e.g. "ee-1.19.2", "lts-3.0.1", "v-2.0.0")
+	// Strip everything up to and including the first "-" and check if the
+	// remainder is valid SemVer.
+	if idx := strings.Index(tag, "-"); idx > 0 {
+		candidate := tag[idx+1:]
+		if _, err := semver.NewVersion(strings.TrimPrefix(candidate, "v")); err == nil {
+			logrus.Debugf("Normalized tag '%s' to '%s' for SemVer parsing (prefix stripped).", tag, candidate)
+			return candidate
+		}
+	}
 
-	return tag // Return original tag if no normalization helps
+	return tag
 }

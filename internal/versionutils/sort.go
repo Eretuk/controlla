@@ -6,21 +6,35 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Masterminds/semver"
+	"github.com/Masterminds/semver/v3"
 )
 
 var (
+	// Exact date tag with dots: 2023.10.05
 	dateTagRegexp = regexp.MustCompile(`^\d{4}\.\d{2}\.\d{2}$`)
-	bigNumRegexp  = regexp.MustCompile(`^\d{7,}`)
+	// Date tag with dashes (with optional suffix): 2026-05-26, 2026-05-26-debian-rootless
+	dateDashTagRegexp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+	// Tag that starts with a very large number (7+ digits), e.g. build timestamps.
+	bigNumRegexp = regexp.MustCompile(`^\d{7,}`)
+	// Four-part numeric tag: X.Y.Z.A — explicitly allowed (normalised to X.Y.Z-rev.A).
+	fourPartTagRegex = regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`)
+	// A segment containing 7+ consecutive digits — catches build timestamps
+	// embedded in any part of the tag, e.g. "26.03.20250318" or "1.0.20231005".
+	embeddedTimestampRegexp = regexp.MustCompile(`\b\d{7,}\b`)
 )
 
-// Deduplicate, sort and filter tags.
-// It removes duplicates, ignores tags with specified keywords, filters out weird tags (dates, big numbers),
-// sorts them in descending order and returns the top N tags.
-// It preserves the original tag format (with 'v' prefix if present).
+// SortAndFilterTags deduplicates, sorts and filters tags.
+// It removes duplicates, ignores tags with specified keywords, filters out
+// weird tags (dates, big numbers), sorts them in descending SemVer order and
+// returns the top N tags.
+//
+// Collision handling: when two tags normalise to the same SemVer string
+// (e.g. "ee-1.19.2" and "1.19.2" both → "1.19.2"), the exact-match tag is
+// preferred over the normalised one so that the version being tracked stays
+// consistent.
 func SortAndFilterTags(tags []string, n int, ignoreKeywords []string) []string {
 	uniqueVersions := make(map[string]*semver.Version)
-	tagMap := make(map[string]string) // semver.String() -> original tag
+	tagMap := make(map[string]string) // semver key → original tag
 
 	for _, tag := range tags {
 		if IsIgnoredTag(tag, ignoreKeywords) {
@@ -30,15 +44,27 @@ func SortAndFilterTags(tags []string, n int, ignoreKeywords []string) []string {
 			continue
 		}
 
-		// --- MODIFICATION: Try to normalize tag before parsing as SemVer ---
 		normalizedTag := TryNormalizeTagForSemVer(tag)
 		cleanTag := strings.TrimPrefix(normalizedTag, "v")
 		v, err := semver.NewVersion(cleanTag)
-		// --- END MODIFICATION ---
+		if err != nil {
+			continue
+		}
 
-		if err == nil {
-			uniqueVersions[v.String()] = v
-			tagMap[v.String()] = tag // сохраняем оригинальный тег!
+		key := v.String()
+		if existing, seen := tagMap[key]; seen {
+			// Prefer the tag that doesn't need normalisation (i.e. is already
+			// a valid SemVer or just has a "v" prefix).
+			existingNorm := TryNormalizeTagForSemVer(existing)
+			tagNorm := TryNormalizeTagForSemVer(tag)
+			if existingNorm != existing && tagNorm == tag {
+				// Current tag is "cleaner" — replace.
+				tagMap[key] = tag
+			}
+			// Otherwise keep what we already have.
+		} else {
+			uniqueVersions[key] = v
+			tagMap[key] = tag
 		}
 	}
 
@@ -107,11 +133,31 @@ func IsIgnoredTag(tag string, ignoreKeywords []string) bool {
 }
 
 func isWeirdTag(tag string) bool {
-	// Filter out date-like tags (e.g., 2023.10.05) and big number tags (e.g., 9799770991.0.0)
-	// as they are unlikely to be valid SemVer tags.
+	// Explicitly allow X.Y.Z.A tags — they are normalised to X.Y.Z-rev.A by
+	// TryNormalizeTagForSemVer and must not be discarded here.
+	if fourPartTagRegex.MatchString(tag) {
+		return false
+	}
+
+	// Filter out pure date tags like 2023.10.05.
 	if dateTagRegexp.MatchString(tag) {
 		return true
 	}
+
+	// Filter out date-prefixed tags like 2026-05-26, 2026-05-26-debian-rootless.
+	if dateDashTagRegexp.MatchString(tag) {
+		return true
+	}
+
+	// Filter out tags containing a build timestamp anywhere in them,
+	// e.g. "26.03.20250318", "1.0.20231005000000". A 7+ digit numeric segment
+	// is a strong signal for a CI timestamp rather than a real version number.
+	if embeddedTimestampRegexp.MatchString(tag) {
+		return true
+	}
+
+	// Filter out tags that start with a very large number (7+ digits leading)
+	// and whose first segment exceeds the plausible year range.
 	if bigNumRegexp.MatchString(tag) {
 		parts := strings.Split(tag, ".")
 		if len(parts) > 0 {
@@ -120,5 +166,6 @@ func isWeirdTag(tag string) bool {
 			}
 		}
 	}
+
 	return false
 }
